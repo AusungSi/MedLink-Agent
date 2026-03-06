@@ -1,0 +1,6 @@
+{
+  "temperature": {"high": 38.0, "low": 36.0},
+  "heart_rate": {"high": 90},
+  "respiratory_rate": {"high": 20},
+  "wbc": {"high": 12.0, "low": 4.0}
+}

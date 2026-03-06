@@ -1,0 +1,28 @@
+{
+  "张三": {
+    "patient_id": "PID001",
+    "imaging_reports": [
+      {
+        "report_id": "IMG001",
+        "date": "2024-05-10",
+        "report_type": "CT",
+        "body_part": "胸部",
+        "report_text": "影像所见：右肺上叶可见一大小约2.5cm x 2.3cm的实性结节，边缘毛糙。纵隔淋巴结未见明显肿大。诊断意见：右肺上叶占位，建议增强扫描进一步明确。"
+      },
+      {
+        "report_id": "IMG002",
+        "date": "2024-08-12",
+        "report_type": "CT",
+        "body_part": "胸部",
+        "report_text": "影像所见：复查胸部CT。右肺上叶结节较前增大，现大小约3.1cm x 2.9cm，边缘可见分叶征。新增纵隔2A组淋巴结肿大，短径约1.2cm。诊断意见：右肺上叶占位，考虑恶性可能，伴纵隔淋巴结转移。"
+      },
+      {
+        "report_id": "IMG003",
+        "date": "2024-07-20",
+        "report_type": "MRI",
+        "body_part": "头部",
+        "report_text": "头部MRI平扫未见明确异常信号灶。"
+      }
+    ]
+  }
+}

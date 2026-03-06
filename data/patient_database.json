@@ -1,0 +1,87 @@
+{
+  "张三": {
+    "patient_id": "P001",
+    "personal_info": {
+      "name": "张三",
+      "age": 68,
+      "gender": "男"
+    },
+    "encounters": [
+      {
+        "encounter_id": "E001",
+        "date": "2024-05-10",
+        "encounter_type": "初诊",
+        "diagnosis": "诊断为原发性高血压（2级）。医生建议开始生活方式干预并考虑药物治疗。",
+        "medications": [
+          {
+            "name": "苯磺酸氨氯平片",
+            "dosage": "每日5mg",
+            "status": "开始服用"
+          }
+        ],
+        "lab_reports": null
+      },
+      {
+        "encounter_id": "E002",
+        "date": "2024-08-22",
+        "encounter_type": "复诊随访",
+        "diagnosis": "血压控制情况评估，当前血压为145/95 mmHg，略高于目标值。",
+        "medications": [
+          {
+            "name": "苯磺酸氨氯平片",
+            "dosage": "每日5mg",
+            "status": "继续服用"
+          }
+        ],
+        "lab_reports": [
+          {
+            "report_name": "血常规",
+            "result_summary": "各项指标均在正常范围内。"
+          }
+        ]
+      }
+    ]
+  },
+  "李四": {
+    "patient_id": "P002",
+    "personal_info": {
+      "name": "李四",
+      "age": 55,
+      "gender": "女"
+    },
+    "encounters": [
+      {
+        "encounter_id": "E003",
+        "date": "2023-11-20",
+        "encounter_type": "常规体检",
+        "diagnosis": "诊断为2型糖尿病。",
+        "medications": null,
+        "lab_reports": [
+          {
+            "report_name": "空腹血糖",
+            "result_summary": "8.2 mmol/L，高于正常范围。"
+          }
+        ]
+      },
+      {
+        "encounter_id": "E004",
+        "date": "2024-07-30",
+        "encounter_type": "糖尿病随访",
+        "diagnosis": "评估血糖控制情况。",
+        "medications": [
+            {
+                "name": "二甲双胍",
+                "dosage": "每日1000mg",
+                "status": "建议开始服用"
+            }
+        ],
+        "lab_reports": [
+          {
+            "report_name": "糖化血红蛋白（HbA1c）",
+            "result_summary": "7.5%，表明近2-3个月血糖控制不佳。"
+          }
+        ]
+      }
+    ]
+  }
+}

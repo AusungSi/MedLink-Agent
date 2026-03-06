@@ -1,0 +1,10 @@
+{
+  "CHADS2-VASc": {
+    "name": "CHADS2-VASc 评分 (房颤卒中风险)",
+    "description": "计算非瓣膜性房颤患者的卒中风险，以决定是否需要抗凝治疗。"
+  },
+  "ASCVD": {
+    "name": "ASCVD 风险评分 (10年)",
+    "description": "评估未来10年发生动脉粥样硬化性心血管疾病的风险。"
+  }
+}
