@@ -1,0 +1,24 @@
+# Python caches
+__pycache__/
+*.py[cod]
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# Test/cache tooling
+.pytest_cache/
+.mypy_cache/
+
+# Virtualenvs
+.venv/
+venv/
+
+# Local env and secrets
+.env
+*.env
+
+# Runtime/generated data
+*.db
+*.sqlite
+*.sqlite3
+agent_backend/vector_db/

@@ -1,0 +1,57 @@
+import os
+from flask import Flask, send_from_directory
+from .config import config
+from .core.extensions import db, migrate, cors, ma, jwt
+
+def create_app(config_name='default'):
+    """
+    应用工厂函数，用于创建 Flask app 实例。
+    """
+    app = Flask(__name__)
+
+    # 1. 从配置对象中加载配置
+    app.config.from_object(config[config_name])
+
+    # 2. 初始化扩展
+    # 将在 extensions.py 中创建的扩展实例与 app 关联
+    db.init_app(app)
+    migrate.init_app(app, db)
+    cors.init_app(app, supports_credentials=True)
+    ma.init_app(app)
+    jwt.init_app(app)
+
+    # 3. 导入并注册蓝图 (Blueprint)
+    #这个api仅用于创建测试时使用的临时用户
+    from .api.dev_api import dev_bp
+    app.register_blueprint(dev_bp)
+
+    from .api.user_api import user_bp
+    app.register_blueprint(user_bp)
+    from .api.history_api import history_bp
+    app.register_blueprint(history_bp)
+    from .api.auth_api import auth_bp
+    app.register_blueprint(auth_bp)
+    from .api.chat_api import chat_bp
+    app.register_blueprint(chat_bp)
+    from .api.department_api import department_bp
+    app.register_blueprint(department_bp)
+    from .api.appointment_api import appointment_bp
+    app.register_blueprint(appointment_bp)
+    from .api.doctor_api import doctor_bp
+    app.register_blueprint(doctor_bp)
+    from .api.medical_record_api import medical_record_bp
+    app.register_blueprint(medical_record_bp)
+    from .api.logout_api import logout_bp
+    app.register_blueprint(logout_bp)
+
+    # 4. 导入数据库模型，以便 Flask-Migrate 能够检测到它们
+    # 这是让 `flask db migrate` 正常工作的关键一步
+    from .models import user_model, consultation_model, appointment_model, review_model, medical_record_model, department_model
+
+    @app.route('/uploads/<path:filename>')
+    def serve_uploaded_file(filename):
+        # 使用 os.path.abspath 获取绝对路径以防止路径遍历攻击 (虽然 secure_filename 已处理)
+        return send_from_directory(os.path.join(app.root_path, '..', 'uploads'), filename)
+    # --- END: 关键修正 ---
+
+    return app
