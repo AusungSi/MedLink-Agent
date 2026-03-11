@@ -177,7 +177,7 @@ def chat_medical_upload():
 
     except Exception as e:
         logging.error(f"Error in /api/chat/medical/upload: {e}", exc_info=True)
-        return jsonify({"error_code": 500, "message": "服务器内部错误"}), 500 [cite: 1563]
+        return jsonify({"error_code": 500, "message": "服务器内部错误"}), 500
 # --- API #11 结束 ---
 
 @chat_bp.route('/new', methods=['POST'])
