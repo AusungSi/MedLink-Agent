@@ -22,3 +22,5 @@ venv/
 *.sqlite
 *.sqlite3
 agent_backend/vector_db/
+vector_db/
+*.gguf

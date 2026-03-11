@@ -1,0 +1,2 @@
+FROM ./bge-v1.5-f16.gguf
+TEMPLATE "{{ .Prompt }}"
