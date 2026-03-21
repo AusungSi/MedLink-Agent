@@ -76,7 +76,7 @@ async def get_dynamic_response_async(question: str) -> str:
         #------------------------------------
 
         print(f"--- Connecting to WebSocket: {ws_url} ---")
-        async with websockets.connect(ws_url, timeout=60) as websocket:
+        async with websockets.connect(ws_url) as websocket:
             print("--- WebSocket Connected ---")
             while True:
                 try:
@@ -89,7 +89,15 @@ async def get_dynamic_response_async(question: str) -> str:
                         speaker = message.get("speaker", "")
                         all_messages.append(f"{speaker}: {content}")
                         if speaker == "Summarizer_Agent":
-                             final_answer = content
+                             # 1. 抹除系统底层的终止暗号
+                             clean_content = content.replace("TERMINATE", "").strip()
+                             
+                             # 2. 如果模型犯傻抄写了工具的原始返回，强制切除掉 JSON 部分
+                             if "Response from calling tool:" in clean_content and "}" in clean_content:
+                                 # 找到最后一个右大括号，取它之后真正由人类医生口吻写的中文内容
+                                 clean_content = clean_content.split("}")[-1].strip()
+                                 
+                             final_answer = clean_content
                              print("--- Final answer identified from Summarizer_Agent ---")
                     elif message_type == "error":
                         error_content = message.get("content", "Unknown error")

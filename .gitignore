@@ -24,3 +24,14 @@ venv/
 agent_backend/vector_db/
 vector_db/
 *.gguf
+
+# ==========================================
+# [新增] 海量 PDF 教材与测试图片忽略
+# ==========================================
+# 忽略医学知识库中的所有 PDF 教材，但保留文件夹结构（以防代码找不到路径报错）
+agent_backend/data/medical_documents/*.pdf
+medical_documents/*.pdf
+
+# 忽略前端上传的临时测试图片和对话文件目录
+backend/uploads/chat_files/
+uploads/

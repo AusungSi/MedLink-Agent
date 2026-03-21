@@ -4,14 +4,44 @@ import logging
 import json
 import requests
 from ..config import OLLAMA_VLM_CONFIG
-
-
+# ==========================================
+    # [团队协作与部署备注]
+    # 现状说明：前端通过聊天框上传图片后，传给 AI 的是该图片的静态访问 URL (http://...)。
+    # 本地转换逻辑：为了让 VLM 能够分析图片，我们需要先将图片转为 Base64。
+    # 因此，这里通过字符串解析，将前端的 URL 强行映射回了本地的物理上传目录 (backend/uploads/chat_files/)。
+    # 
+    # ⚠️ 未来生产环境优化建议：
+    # 如果未来项目上云，前后端分离部署，或者使用了阿里云 OSS/腾讯云 COS 等对象存储，
+    # 本地的物理路径将失效。届时请将此段逻辑重构为：
+    # "通过 requests.get(image_path) 直接下载 URL 的二进制数据，并在内存中转为 Base64"。
+    # ==========================================
+from urllib.parse import urlparse # 新增：用于解析URL
+from ..config import OLLAMA_VLM_CONFIG, BASE_DIR # 新增：导入BASE_DIR
 def _call_vlm_api(image_path: str, prompt: str) -> str:
     """
     一个通用的辅助函数，用于调用Ollama VLM API。
     【修正版】此版本可以正确解析AutoGen的标准LLM配置格式。
     """
     logging.info(f"开始调用VLM API分析图片: {image_path}")
+
+    # --- [新增：URL 转本地路径逻辑] ---
+    if image_path.startswith("http"):
+        try:
+            # 1. 从 URL 中提取文件名 (例如: 5_1774057894_R.jpg)
+            filename = os.path.basename(urlparse(image_path).path)
+            
+            # 2. 构建本地物理路径
+            # 根据您的描述，文件存储在 D:\CCCC\medical_qa\backend\uploads\chat_files
+            # 而 agent_backend/src/config.py 中的 BASE_DIR 指向 D:\CCCC\medical_qa\agent_backend
+            # 所以我们需要跳出 agent_backend 进入 backend
+            project_root = os.path.dirname(BASE_DIR) # 获取 D:\CCCC\medical_qa
+            local_path = os.path.join(project_root, "backend", "uploads", "chat_files", filename)
+            
+            logging.info(f"检测到 URL，已转换为本地路径: {local_path}")
+            image_path = local_path
+        except Exception as e:
+            logging.warning(f"尝试解析 URL 路径失败: {e}，将尝试原始路径。")
+    # --- [路径修复结束] ---
 
     # 1. 检查图片路径
     if not os.path.exists(image_path):
@@ -28,71 +58,50 @@ def _call_vlm_api(image_path: str, prompt: str) -> str:
         logging.error(error_msg)
         return error_msg
 
-    # --- [核心修正] ---
-    # 3. 从AutoGen标准配置中提取模型名称和API地址
+
+    # --- 3. 配置解析与接口适配 ---
+    vlm_config = OLLAMA_VLM_CONFIG["config_list"][0]
+    model_name = vlm_config["model"]
+    base_url = vlm_config.get("base_url", "").rstrip('/')
+    api_key = vlm_config.get("api_key", "ollama")
+
+    # 判断是 阿里云/OpenAI 接口 还是 本地 Ollama 接口
+    is_openai_compatible = "dashscope" in base_url or base_url.endswith("/v1")
+
     try:
-        # 从config_list的第一个配置项中提取信息
-        vlm_config = OLLAMA_VLM_CONFIG["config_list"][0]
-        model_name = vlm_config["model"]
-        
-        # 从base_url构建完整的 /api/generate URL
-        # 使用 rstrip('/') 确保URL拼接正确，无论base_url末尾是否有斜杠
-        base_url = vlm_config.get("base_url", "http://localhost:11434/v1").rstrip('/')
-        # 注意：多模态调用通常使用 /api/generate 而不是 /v1/chat/completions
-        # 我们需要将 v1 替换为 api
-        if base_url.endswith("/v1"):
-            base_url = base_url[:-3] # 移除 '/v1'
-        
-        api_url = f"{base_url}/api/generate"
+        if is_openai_compatible:
+            # --- 方案 A: OpenAI 兼容模式 (适用于 DashScope/Qwen-VL) ---
+            api_url = f"{base_url}/chat/completions" if not base_url.endswith("/chat/completions") else base_url
+            headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+            payload = {
+                "model": model_name,
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded_image}"}}
+                    ]
+                }]
+            }
+            response = requests.post(api_url, headers=headers, json=payload, timeout=60)
+            response.raise_for_status()
+            return response.json()['choices'][0]['message']['content']
 
-    except (KeyError, IndexError) as e:
-        error_msg = f"错误：VLM配置格式不正确或不完整。请检查src/config.py中的OLLAMA_VLM_CONFIG。错误: {e}"
-        logging.error(error_msg)
-        return error_msg
-    # --- [核心修正结束] ---
+        else:
+            # --- 方案 B: 本地 Ollama 原生模式 ---
+            # 如果是本地，则手动处理路径
+            if base_url.endswith("/v1"):
+                base_url = base_url[:-3]
+            api_url = f"{base_url}/api/generate"
+            payload = {"model": model_name, "prompt": prompt, "images": [encoded_image], "stream": False}
+            response = requests.post(api_url, json=payload, timeout=60)
+            response.raise_for_status()
+            return response.json().get("response", "").strip()
 
-    # 4. 构建API请求体
-    payload = {
-        "model": model_name,
-        "prompt": prompt,
-        "images": [encoded_image],
-        "stream": True
-    }
-
-    # 5. 发送请求并处理流式响应
-    try:
-        logging.info(f"向Ollama VLM模型 '{model_name}' (at {api_url}) 发送请求...")
-        response = requests.post(
-            api_url,
-            json=payload,
-            stream=True
-        )
-        response.raise_for_status()
-
-        full_response = []
-        for line in response.iter_lines():
-            if line:
-                chunk = json.loads(line)
-                full_response.append(chunk.get("response", ""))
-                if chunk.get("done"):
-                    break
-        
-        final_text = "".join(full_response).strip()
-        logging.info("成功接收并解析了VLM的完整响应。")
-        return final_text
-
-    except requests.exceptions.RequestException as e:
-        error_msg = f"错误：调用Ollama VLM API时发生网络错误: {e}"
-        logging.error(error_msg)
-        return error_msg
-    except json.JSONDecodeError as e:
-        error_msg = f"错误：解析Ollama VLM API的响应时失败: {e}"
-        logging.error(error_msg)
-        return error_msg
     except Exception as e:
-        error_msg = f"错误：处理VLM API调用时发生未知错误: {e}"
-        logging.error(error_msg)
-        return error_msg
+        logging.error(f"VLM 调用失败: {e}")
+        return f"错误：VLM 服务请求失败: {e}"
+    
 
 # 工具1: 总结现有图文报告
 def summarize_medical_report(image_path: str, report_text: str) -> str:

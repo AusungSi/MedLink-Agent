@@ -5,10 +5,42 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 import logging
 import requests # 导入 requests 库
 import json
-
+import os
+import logging
+import chromadb
+# 针对国内网络，设置 HuggingFace 镜像源，确保第一次能光速下载模型权重
+os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+from sentence_transformers import SentenceTransformer
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class RagUtils:
+    def __init__(self, ollama_model_name: str, db_path: str, source_dir: str):
+        self.db_path = db_path
+        self.source_dir = source_dir
+        
+        logging.info("正在唤醒本地 RTX 5060 显卡，加载开源中文向量模型...")
+        # 自动下载并加载北京智源研究院（BAAI）开源的霸榜级中文模型 (仅需几百MB)
+        # 它会自动检测你的 5060 并将其载入显存 (CUDA)
+        self.embedding_model = SentenceTransformer('BAAI/bge-base-zh-v1.5', device='cuda')
+        logging.info("✅ 本地 Embedding 模型已成功部署至显存！完全脱离公网环境。")
+
+        self.client = chromadb.PersistentClient(path=db_path)
+        self.collection = self.client.get_or_create_collection(
+            name="medical_knowledge_base",
+            metadata={"hnsw:space": "cosine"}
+        )
+        self._build_knowledge_base_if_needed()
+
+    def _get_embedding(self, text: str):
+        """完全本地断网计算向量，榨干 5060 算力"""
+        try:
+            # encode 返回的是 numpy 数组，必须转为 list 才能存入 ChromaDB
+            vector = self.embedding_model.encode(text, normalize_embeddings=True)
+            return vector.tolist()
+        except Exception as e:
+            logging.error(f"本地显卡向量化失败: {e}")
+            return None
+    """
     def __init__(self, ollama_model_name: str, db_path: str, source_dir: str):
         self.ollama_model_name = ollama_model_name
         self.ollama_api_url = "http://localhost:11434/api/embeddings" # 定义Ollama API地址
@@ -22,7 +54,6 @@ class RagUtils:
         self._build_knowledge_base_if_needed()
 
     def _get_embedding(self, text: str):
-        """一个简单的函数，用于从Ollama获取单个文本的embedding"""
         try:
             payload = {
                 "model": self.ollama_model_name,
@@ -34,7 +65,7 @@ class RagUtils:
         except requests.exceptions.RequestException as e:
             logging.error(f"调用Ollama embedding API失败: {e}")
             return None
-
+    """
     def _build_knowledge_base_if_needed(self):
         """
         【高效优化版】
@@ -49,13 +80,29 @@ class RagUtils:
         # --- 第1步：快速路径检查 ---
         
         # 1a. 获取数据库中所有已处理过的文件的源路径
+        processed_files_paths = set()
         try:
-            existing_metadatas = self.collection.get(include=["metadatas"])['metadatas']
-            processed_files_paths = set(meta['source'] for meta in existing_metadatas if 'source' in meta)
-            logging.info(f"数据库中已存在 {len(processed_files_paths)} 个文件的记录。")
+            total_count = self.collection.count()
+            if total_count > 0:
+                logging.info(f"数据库中共有 {total_count} 个片段，正在分批核对元数据...")
+                
+                # 采用分批读取（每次 500 条），完美避开 SQLite 的 999 变量限制
+                batch_size = 500
+                for offset in range(0, total_count, batch_size):
+                    batch_data = self.collection.get(
+                        include=["metadatas"], 
+                        limit=batch_size, 
+                        offset=offset
+                    )
+                    for meta in batch_data['metadatas']:
+                        if meta and 'source' in meta:
+                            processed_files_paths.add(meta['source'])
+                
+                logging.info(f"核对完成！数据库中已记录 {len(processed_files_paths)} 个原始文件。")
+            else:
+                logging.info("数据库为空，准备执行首次入库。")
         except Exception as e:
-            logging.warning(f"从数据库获取元数据失败，将假定数据库为空。错误: {e}")
-            processed_files_paths = set()
+            logging.error(f"分批获取元数据失败！将假定数据库为空。错误详情: {e}")
 
         # 1b. 获取磁盘上所有PDF文件的绝对路径
         all_disk_files_paths = {

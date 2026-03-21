@@ -46,12 +46,20 @@ class ToolExecutor:
         return json.dumps(formulas, ensure_ascii=False, indent=2)
 
     def run_clinical_calculation(self, formula_name: str, params: dict) -> str:
-        # 为了让LLM能正确调用，我们将原始的JSON输出转换为字符串
+        import json # 确保引入 json 库
         try:
             result_obj = self.clinical_engine.run_calculation(formula_name, params)
-            return result_obj.model_dump_json(indent=2)
+            
+            # 【核心修复】：判断数据类型。如果是我们手写的字典，就用 json.dumps；如果是老旧的对象，就用 model_dump_json。
+            if isinstance(result_obj, dict):
+                return json.dumps(result_obj, ensure_ascii=False, indent=2)
+            else:
+                return result_obj.model_dump_json(indent=2)
+                
         except (ValueError, KeyError) as e:
-            return f"计算错误: {e}"
+            return f"计算参数错误: {e}"
+        except Exception as e:
+            return f"计算执行发生未知异常: {e}"
 
 # 角色1: 用户代理 / 代码执行者
 Human_User_Proxy = autogen.UserProxyAgent(
@@ -68,34 +76,38 @@ Chief_Medical_Officer = autogen.AssistantAgent(
     llm_config=OLLAMA_LLM_CONFIG,
     # === [关键修改] 替换为下面这个更严格的 system_message ===
     system_message="""
-    你是一位顶级的医疗诊断策略师。你的工作是迭代式地分析信息并做出下一步行动的决策。
-    你的工作循环如下：
-    分析现状：仔细阅读完整的对话历史，包括用户的原始问题和你已经收集到的所有工具返回结果。
-    决策下一步：根据下面的【决策优先级规则】，决定下一步需要获取什么信息。
-    下达指令：将你的决策，以清晰的自然语言指令形式，传达给你的助手Dispatcher_Agent。
-    检测异常：如果Dispatcher_Agent返回异常，则直接结束后续的传达，输出EXECUTION_COMPLETE
-    【决策优先级规则 (必须严格遵守)】
-    (这里的优先级规则和之前一样：病人优先 -> 知识库 -> 网页)，不要使用网页搜索来检索病人的名字，这是被禁止的
-    【极其严格的输出规则】
-    你的回复**必须是**以下两种格式之一，绝对不能包含任何其他文字、解释、思考过程或标签：
-    格式一 (下达指令): 给Dispatcher_Agent的一句明确指令。例如："请调用 retrieve_patient_records 工具，查询病人‘某某’关于‘某某某’的记录。"
-    格式二 (结束任务): 当你判断所有信息都已收集完毕时，你的回复**必须是且仅是**单词 `EXECUTION_COMPLETE`，重复一遍，你的最终输出中，绝对禁止出现 `<think>` 标签或任何形式的自我解释。
+    你是一位严谨的甲状腺专科主任医师。你必须根据用户提供的信息状态，选择唯一的执行路径。
 
-    严令禁止回复其他内容，你的回复只能是上述两种格式
-    目前有如下工具：
-        
-        【临床计算】
-        - list_available_calculations(): **这是第一步！** 当用户的请求涉及任何形式的计算、评分或公式时，你必须首先调用此工具来查看有哪些可用的计算。
-        - run_clinical_calculation(formula_name: str, params: dict): 在你通过list_available_calculations确认了要使用的公式后，用这个工具来执行计算。
-        
-        【数据查询】
-        - retrieve_context_from_db(query: str): 从通用医疗知识库中检索信息。
-        - retrieve_patient_records(patient_name: str, query_content: str): 查询指定病人的病历。
-        - search_web(query: str): 搜索最新的网络信息。
-        
-        【影像分析】
-        - summarize_medical_report(image_path: str, report_text: str): 总结已有的图文报告。
-        - generate_report_from_image(image_path: str, requested_focus: str): 从新影像生成报告。    禁止调用不存在的工具
+    【重要：开场引导规则】
+    - 如果用户发起的对话中**没有**包含图片路径、图片附件或明确的影像描述：
+      你必须在回复的最开头第一句话写道：“【系统提示：为了获得精准的 TI-RADS 评估，请点击上传或提供您的甲状腺超声影像图】”。
+      随后，你可以简单回答用户的文字问题，并直接回复 `EXECUTION_COMPLETE` 结束流程。
+
+    【重要：防循环逻辑】
+    - 你必须维护一个内心的“检查清单”：
+      1. 是否已获得影像特征？(通过 generate_report_from_image)
+      2. 是否已计算 TI-RADS？(通过 run_clinical_calculation)
+      3. 是否已检索指南？(通过 retrieve_context_from_db)
+    - **禁止复读**：如果 Dispatcher 已经返回了工具结果，严禁再次下达相同的工具调用指令。
+    - **立即总结**：一旦 `retrieve_context_from_db` 返回了指南内容，你必须立刻结合之前算出的 TI-RADS 分数给出最终诊断建议，严禁再次调用任何工具。
+
+    【甲状腺专科流水线 SOP】
+    1. 提取特征 -> 2. 计算 TI-RADS (formula_name='ti-rads') -> 3. 检索指南 -> 4. 给出最终诊断。
+
+    【重要:特征提取强制词汇表】
+    当要求 Dispatcher 调用 `run_clinical_calculation` 工具时，传入的特征值（values）必须**一字不差**地从以下列表中选择，绝不能使用英文或近义词：
+    - composition (成份): 只能选 "囊性", "蜂窝状", "无回声", "混合实性", "实性"
+    - echogenicity (回声): 只能选 "无回声", "高回声", "等回声", "低回声", "极低回声"
+    - shape (形状): 只能选 "宽大于高", "高大于宽"
+    - margin (边缘): 只能选 "光滑", "局限", "分叶", "不规则", "腺体外侵犯"
+    - echogenic_foci (局灶性强回声): 只能选 "无", "大彗星尾", "粗钙化", "周边钙化", "点状强回声"
+
+    - **禁止复读**：收到“【指南库检索结果已送达】”后，说明信息已齐备。
+    - **强制终结**：收到指南后，立刻结合分数和建议写出总结，并回复 `EXECUTION_COMPLETE`。
+
+    【输出格式约束】
+    - 你的回复只能是：给 Dispatcher 的指令 **或者** 单词 `EXECUTION_COMPLETE`。
+    - 严禁输出 <think> 标签或任何自我解释。
     """
 )
 
@@ -105,11 +117,15 @@ Dispatcher_Agent = autogen.AssistantAgent(
     llm_config=OLLAMA_SMALL_LLM_CONFIG,
     # === [关键修改] 替换为下面这个更精简、更严格的 system_message ===
     system_message="""
-    你是一个指令解析器。你的唯一任务是：读取Chief_Medical_Officer发出的最新一条指令，并将其准确无误地转换为一个工具调用（function call）。
-    【严格规则】
-    你的输出必须直接是一个工具调用，不能包含任何额外的文字、解释或确认信息。
-    你不需要做任何决策或思考，只需忠实地翻译指令。
-    如果指令不清晰，尽你所能去匹配最合适的工具和参数。
+    你是一个精准的指令翻译官。
+    
+    【执行准则】
+    1. 识别指令：将 CMO 的指令转换为对应的工具调用。
+    2. 结果标识：在返回工具结果给 CMO 时，如果是 RAG 检索结果，请在文本开头明确标识“【指南库检索结果已送达】”。
+    
+    【禁止事项】
+    - 严禁自行发挥，严禁输出任何 JSON 以外的解释性文字。
+    - 严禁在未收到新指令的情况下重复执行上一次的任务。
     """
 )
 
@@ -117,7 +133,7 @@ Dispatcher_Agent = autogen.AssistantAgent(
 Summarizer_Agent = autogen.AssistantAgent(
     name="Summarizer_Agent",
     llm_config=OLLAMA_LLM_CONFIG, # 总结者需要较强的语言能力
-    system_message="""你是一位专业的医疗信息整合与报告专家。你的【唯一】职责是根据对话历史中提供的信息，为用户的原始问题生成一份全面、清晰、严谨且对用户友好的最终报告。 **你的核心工作流程：** 1. **信息溯源**: * 仔细阅读并理解整个对话历史。 * 你的回答【必须】严格基于 Chief_Medical_Officer 制定的原始计划，以及由 Human_User_Proxy 返回的工具执行结果（以 "Response from calling tool" 标记）。 * 识别并整合所有从工具中获取的关键数据点。 2. **构建报告**: * 以清晰的结构（例如，使用标题、列表）来组织信息。 * 使用通俗易懂的语言向用户解释专业的医疗概念。 * 如果信息来源于 search_web 工具，在引用该信息时，请以 "[来源: URL]" 的格式附上其对应的URL。这是强制要求。 * 如果不同来源的信息存在矛盾，或者信息不充分，必须如实指出，并建议用户咨询专业医生。 3. **完成并终止**: * 在生成完整的最终报告后，你【必须】在消息的末尾单独另起一行写上 'TERMINATE' 来结束整个对话。 **【严格规则】:** - **绝对禁止**调用任何工具或制定新的计划。你的任务是“总结”，不是“执行”或“规划”。 - **绝对禁止**引入任何在工具返回结果之外的虚构信息。你的回答必须基于事实。 - 你的回复应该是最终的、完整的答案，而不是对过程的评论。 **示例：** * **输入上下文**: (包含CMO的计划 + 多个工具的返回结果) * **你的正确输出**: "您好，根据您的问题，我们为您整理了如下信息： 关于张三先生的病历记录显示，他在2023年5月10日被诊断为原发性高血压... 关于原发性高血压的通用定义是... 根据以上信息，建议张三先生... TERMINATE"
+    system_message="""你是一位专业的医疗信息整合与报告专家。你的【唯一】职责是根据对话历史中提供的信息，为用户的原始问题生成一份全面、清晰、严谨且对用户友好的最终报告。 **你的核心工作流程：** 1. **信息溯源**: * 仔细阅读并理解整个对话历史。 * 你的回答【必须】严格基于 Chief_Medical_Officer 制定的原始计划，以及由 Human_User_Proxy 返回的工具执行结果（以 "Response from calling tool" 标记）。 * 识别并整合所有从工具中获取的关键数据点。 2. **构建报告**: * 以清晰的结构（例如，使用标题、列表）来组织信息。 * **高亮专科证据**: 在最终报告中，必须单独开辟一个模块，清晰地列出 `ti-rads` 计算工具给出的【TI-RADS积分】和【恶性概率】，并直接引用从知识库检索到的【指南原文】，让最终的决策链条完全透明。* 使用通俗易懂的语言向用户解释专业的医疗概念。 * 如果信息来源于 search_web 工具，在引用该信息时，请以 "[来源: URL]" 的格式附上其对应的URL。这是强制要求。 * 如果不同来源的信息存在矛盾，或者信息不充分，必须如实指出，并建议用户咨询专业医生。 3. **完成并终止**: * 在生成完整的最终报告后，你【必须】在消息的末尾单独另起一行写上 'TERMINATE' 来结束整个对话。 **【严格规则】:** - **绝对禁止**调用任何工具或制定新的计划。你的任务是“总结”，不是“执行”或“规划”。 - **绝对禁止**引入任何在工具返回结果之外的虚构信息。你的回答必须基于事实。 - 你的回复应该是最终的、完整的答案，而不是对过程的评论。 **示例：** * **输入上下文**: (包含CMO的计划 + 多个工具的返回结果) * **你的正确输出**: "您好，根据您的问题，我们为您整理了如下信息： 关于张三先生的病历记录显示，他在2023年5月10日被诊断为原发性高血压... 关于原发性高血压的通用定义是... 根据以上信息，建议张三先生... TERMINATE"
 """
 )
 
@@ -131,6 +147,8 @@ def custom_speaker_selection_func(last_speaker: autogen.Agent, groupchat: autoge
     3.  Dispatcher -> Human_User_Proxy (翻译完成，准备执行)
     4.  Human_User_Proxy -> CMO (执行完毕，返回结果以供分析)
     5.  CMO (说出 "EXECUTION_COMPLETE") -> Summarizer (任务结束，开始总结)
+
+    在撰写最终报告时，必须确保核心医疗数据的绝对保真。对于【TI-RADS积分】与【恶性概率】，须精确提取工具返回的原始数值，严禁进行任何形式的数值篡改或主观定性偏移；对于【指南建议】，须采取原文引用的方式呈现 RAG 知识库的检索结果，严禁脱离检索文本进行自行总结、演绎或文字润色。
     """
     messages = groupchat.messages
     last_message = messages[-1]

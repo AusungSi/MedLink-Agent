@@ -66,6 +66,9 @@ class ClinicalEngine:
         # --- 身体成分 (formulas.body_composition) ---
         self.formula_registry['body-fat-from-bmi'] = formulas.body_composition.calculate_body_fat_bmi
         self.formula_registry['body-fat-from-waist'] = formulas.body_composition.calculate_body_fat_waist
+
+        # --- 甲状腺专科 (formulas.thyroid) ---
+        self.formula_registry['ti-rads'] = formulas.thyroid.calculate_thyroid_ti_rads
         
 
     def list_available_formulas(self) -> Dict[str, str]:

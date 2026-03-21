@@ -606,7 +606,9 @@
           setTimeout(() => messageInput.classList.remove('shake'), 500);
           return;
         }
-      
+        // 备份当前选中的文件列表，防止被后续清空操作影响
+        const filesToSend = [...selectedFiles];
+
         sendButton.disabled = true;
         sendButton.innerHTML = '<i class="fa fa-circle-o-notch button-loading"></i>';
       
@@ -636,8 +638,8 @@
       
         try {
           let aiAnswer;
-          if (selectedFiles.length > 0) {
-            aiAnswer = await apiService.sendMedicalQueryWithFiles(messageContent, selectedFiles);
+          if (filesToSend.length > 0) {
+            aiAnswer = await apiService.sendMedicalQueryWithFiles(messageContent, filesToSend);
           } else {
             aiAnswer = await apiService.sendMedicalQuery(messageContent);
           }
