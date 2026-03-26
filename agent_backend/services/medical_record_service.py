@@ -14,6 +14,7 @@ from agent_backend.src.config import OLLAMA_LLM_CONFIG
 
 def run_record_generation_workflow(
     patient_name: str, 
+    chat_context: str,
     tool_executor: ToolExecutor
 ) -> Dict[str, Any]:
     """
@@ -28,6 +29,11 @@ def run_record_generation_workflow(
     1. 接收一个病人姓名：'{patient_name}'。
     2. 调用 `retrieve_patient_records` 工具，并使用 "查询该病人的所有记录" 作为查询词，来获取该病人的全部健康信息。
     3. 根据从工具返回的信息，将内容整理并填充到一个结构化的JSON对象中。
+    仔细阅读以下病人 '{patient_name}' 的【真实问诊对话记录】：
+    
+    <<< 问诊记录开始 >>>
+    {chat_context}
+    <<< 问诊记录结束 >>>
 
     【极其严格的输出规则】
     - 你的最终回复 **必须** 是一个单一的、完整的、可以被直接解析的JSON对象。
@@ -68,7 +74,7 @@ def run_record_generation_workflow(
         description="查询指定病人的病历信息。"
     )(retrieve_patient_records_func)
 
-    initial_prompt = f"请为病人 '{patient_name}' 生成一份完整的、符合系统定义的JSON格式病历。立即调用工具获取数据。"
+    initial_prompt = f"请提取上述真实对话记录中的信息，为病人 '{patient_name}' 生成符合模板的纯净JSON格式病历。不要调用任何工具，直接分析文本并输出结果。"
     
     temp_user_proxy.initiate_chat(
         recipient=generator_agent,

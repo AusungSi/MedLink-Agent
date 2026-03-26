@@ -6,6 +6,10 @@ from ..services import llm_service
 from ..models.user_model import UserModel
 import json
 from datetime import datetime
+import re       # 【新增】正则表达式库，用于提取文本中的链接
+import os       # 【新增】路径处理库
+import shutil   # 【新增】文件复制库
+from flask import current_app # 【新增】获取 Flask 运行上下文目录
 def get_recent_consultation(user_id):
     recent_record_ai=AIConsultationModel.query.filter_by(patient_id=user_id).order_by(AIConsultationModel.created_at.desc()).first()
     recent_record_doctor =DoctorConsultationModel.query.filter_by(patient_id=user_id).order_by(DoctorConsultationModel.created_at.desc()).first()
@@ -215,11 +219,32 @@ def generate_medical_record_from_history(user_id):
         # FastAPI (Fastapi.txt) 明确要求 patient_name
         return None
 
+   # ==========================================
+    # 【重点修改】：精准获取当前（最新）会话的聊天记录
+    # ==========================================
+    # 1. 找到用户最新的一次主问诊记录
+    latest_consultation = AIConsultationModel.query.filter_by(patient_id=user_id).order_by(AIConsultationModel.created_at.desc()).first()
+    
+    chat_context = "暂无有效对话记录。"
+    
+    if latest_consultation:
+        # 2. 仅仅查询绑定在这一次问诊ID下的聊天消息
+        recent_messages = ChatMessageModel.query.filter_by(consultation_id=latest_consultation.id).order_by(ChatMessageModel.timestamp).all()
+        
+        # 3. 拼装成更适合大模型阅读的剧本对话格式（比 JSON 效果更好）
+        dialogue_lines = []
+        for msg in recent_messages:
+            speaker = "病人" if msg.sender_type == 'user' else "AI医生"
+            dialogue_lines.append(f"[{speaker}]: {msg.content}")
+        
+        chat_context = "\n".join(dialogue_lines)
+    # ==========================================
+
     # --- 2. (修改) 调用 llm_service ---
     try:
         # 调用 llm_service.py (llm_service.py) 中你写好的函数
         print(f"--- Calling llm_service.generate_structured_medical_record for {patient_name} ---")
-        generated_record_dict = llm_service.generate_structured_medical_record(patient_name)
+        generated_record_dict = llm_service.generate_structured_medical_record(patient_name, chat_context)
     
     except Exception as e:
         # 捕获 llm_service (llm_service.py) 抛出的异常 (例如连接失败或FastAPI返回错误)
@@ -232,37 +257,65 @@ def generate_medical_record_from_history(user_id):
 
     # --- 3. (关键修改) 组合数据并保存到 Flask 数据库 ---
     try:
-        # 从 AI (FastAPI) (Fastapi.txt) 获取动态信息
-        ai_summary = generated_record_dict.get("summary", "暂无主诉")
-        ai_encounters = generated_record_dict.get("encounters", [])
+        # 直接使用 AI 生成的新版 JSON 字段名提取数据
+        ai_chief_complaint = generated_record_dict.get("chief_complaint", "暂无主诉")
+        ai_history_present_illness = generated_record_dict.get("history_of_present_illness", "暂无现病史")
+        ai_diagnosis = generated_record_dict.get("diagnosis", "暂无诊断")
         
-        # 从 encounters 提取简单的诊断
-        primary_diagnosis = "暂无诊断"
-        history_present_illness = "暂无现病史"
-        
-        if ai_encounters:
-            first_encounter = ai_encounters[0]
-            primary_diagnosis = first_encounter.get("diagnosis", "暂无诊断")
-            history_present_illness = json.dumps(ai_encounters, ensure_ascii=False)
+        # 提取 AI 生成的病史，如果 AI 没生成，再用数据库里的兜底
+        ai_past_medical_history = generated_record_dict.get("past_medical_history", user.basic_medical_history or "患者未提供")
+        ai_personal_history = generated_record_dict.get("personal_history", user.personal_history or "患者未提供")
+        ai_family_history = generated_record_dict.get("family_history", user.family_history or "患者未提供")
 
-        # --- 替换占位符 ---
+        # --- 创建数据库记录 ---
         new_medical_record = MedicalRecordModel(
             patient_id=user_id, 
-            
-            # 1. AI 生成的动态信息
-            chief_complaint=ai_summary, # 使用FastAPI的summary
-            history_present_illness=history_present_illness, # 存储 encounters 详情
-            diagnosis=primary_diagnosis, # 使用第一个 encounter 的诊断
-            
-            # 2. 从 UserModel 提取的静态信息
-            past_medical_history=user.basic_medical_history or "患者未提供", 
-            personal_history=user.personal_history or "患者未提供", 
-            family_history=user.family_history or "患者未提供"
+            chief_complaint=ai_chief_complaint, 
+            history_present_illness=ai_history_present_illness, 
+            diagnosis=ai_diagnosis, 
+            past_medical_history=ai_past_medical_history, 
+            personal_history=ai_personal_history, 
+            family_history=ai_family_history
         )
         
         db.session.add(new_medical_record)
         db.session.commit()
         
+        # =====================================================================
+        # 【修改】检查当前对话是否含有图片，并归档保存路径
+        # =====================================================================
+        try:
+            target_dir = "D://CCCC//medical_qa//backend//uploads//medical_records_pic"
+            os.makedirs(target_dir, exist_ok=True)
+            source_dir = os.path.join(current_app.root_path, '..', 'uploads', 'chat_files')
+
+            image_filenames = []
+            for msg in recent_messages:
+                if msg.sender_type == 'user':
+                    matches = re.findall(r'uploads/chat_files/([^\s]+\.(?:png|jpe?g|gif))', msg.content, re.IGNORECASE)
+                    image_filenames.extend(matches)
+
+            saved_image_paths = [] # 记录保存成功的相对路径
+            
+            for filename in set(image_filenames):
+                src_path = os.path.join(source_dir, filename)
+                new_filename = f"record_{new_medical_record.id}_{filename}"
+                target_path = os.path.join(target_dir, new_filename)
+
+                if os.path.exists(src_path):
+                    shutil.copy2(src_path, target_path)
+                    # 记录可通过网络访问的相对路径
+                    saved_image_paths.append(f"/uploads/medical_records_pic/{new_filename}")
+            
+            # 【新增】将图片路径存入数据库（用逗号分隔）
+            if saved_image_paths:
+                new_medical_record.image_paths = ",".join(saved_image_paths)
+                db.session.commit() # 再次提交以保存图片路径
+
+        except Exception as img_e:
+            print(f"❌ 保存病历图片时出错: {img_e}")
+        # =====================================================================
+
         # --- 4. (修改) 返回符合 API 文档 (大创文档xin.docx) 的字典 ---
         # [cite_start]你的Flask API (大创文档xin.docx) 需要返回中文键 [cite: 532]
         final_record_dict = {

@@ -1,15 +1,13 @@
 # src/rag_utils.py
+import os
+os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 import chromadb
 from langchain_community.document_loaders import DirectoryLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import logging
 import requests # 导入 requests 库
 import json
-import os
 import logging
-import chromadb
-# 针对国内网络，设置 HuggingFace 镜像源，确保第一次能光速下载模型权重
-os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 from sentence_transformers import SentenceTransformer
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 

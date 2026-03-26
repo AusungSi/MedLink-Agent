@@ -503,7 +503,7 @@ const apiService = {
       }
 
       const data = await response.json();
-      return data.record; // 假设后端返回 { "record": {...} }
+      return data;
     } catch (error) {
       console.error('generateMedicalRecord 调用失败:', error.message);
       throw error;

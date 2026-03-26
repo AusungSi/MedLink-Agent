@@ -17,6 +17,7 @@ class MedicalRecordModel(db.Model):
     personal_history = db.Column(db.Text, nullable=True, comment='个人史')
     family_history = db.Column(db.Text, nullable=True, comment='家族史')
     diagnosis = db.Column(db.Text, nullable=True, comment='诊断结果')
+    image_paths = db.Column(db.String(1000), nullable=True, comment='病历关联的图片路径')
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow, comment='病历创建时间')
 

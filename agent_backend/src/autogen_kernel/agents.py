@@ -4,6 +4,7 @@ from autogen import GroupChat, GroupChatManager
 import functools
 import json
 import logging
+import requests
 # from functools import partial
 
 # --- 【修改】从新的位置导入 ---
@@ -60,6 +61,36 @@ class ToolExecutor:
             return f"计算参数错误: {e}"
         except Exception as e:
             return f"计算执行发生未知异常: {e}"
+        
+    def retrieve_patient_records(self, patient_name: str) -> str:
+        """
+        供大模型调用的工具：查询指定病人的最新历史病历。
+        """
+        print(f"\n--- [Dispatcher 调用工具] 正在跨端查询病人 '{patient_name}' 的病历 ---")
+        try:
+            # 调用 Flask 的内部接口 (假设 Flask 运行在默认的 5000 端口)
+            url = f"http://127.0.0.1:5000/api/chat/internal/record/{patient_name}"
+            response = requests.get(url, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                record_text = (
+                    f"【系统返回：找到 {patient_name} 的最新病历】\n"
+                    f"- 记录时间: {data['created_at']}\n"
+                    f"- 主诉: {data['chief_complaint']}\n"
+                    f"- 现病史: {data['history_present_illness']}\n"
+                    f"- 既往史: {data['past_medical_history']}\n"
+                    f"- 诊断结论: {data['diagnosis']}\n"
+                )
+                print(f"✅ 成功获取 {patient_name} 的病历！")
+                return record_text
+            else:
+                print(f"❌ 数据库中未找到 {patient_name} 的病历。")
+                return f"系统提示：未能找到名为 '{patient_name}' 的病历记录，请提醒用户确认名字或先生成病历。"
+                
+        except Exception as e:
+            print(f"❌ 数据库接口连接失败: {e}")
+            return f"系统提示：查询病历时发生网络错误: {str(e)}"
 
 # 角色1: 用户代理 / 代码执行者
 Human_User_Proxy = autogen.UserProxyAgent(
@@ -76,38 +107,90 @@ Chief_Medical_Officer = autogen.AssistantAgent(
     llm_config=OLLAMA_LLM_CONFIG,
     # === [关键修改] 替换为下面这个更严格的 system_message ===
     system_message="""
-    你是一位严谨的甲状腺专科主任医师。你必须根据用户提供的信息状态，选择唯一的执行路径。
+    你是一位顶级的医疗诊断策略师和严谨的甲状腺专科主任医师。你的工作是迭代式地分析信息并做出下一步行动的决策。
+    
+    【你的核心能力与职责】
+    你可以处理用户的两类核心诉求，请根据用户的输入灵活采取不同的 SOP（标准作业程序）：
 
-    【重要：开场引导规则】
-    - 如果用户发起的对话中**没有**包含图片路径、图片附件或明确的影像描述：
-      你必须在回复的最开头第一句话写道：“【系统提示：为了获得精准的 TI-RADS 评估，请点击上传或提供您的甲状腺超声影像图】”。
-      随后，你可以简单回答用户的文字问题，并直接回复 `EXECUTION_COMPLETE` 结束流程。
+    === 场景一：病史分析与病情咨询（纯文字/查病历） ===
+    如果用户要求分析某位病人（如“王五”）的历史病历、询问病情发展，或提供纯文字的症状描述：
+    1. 收集病史：指令 Dispatcher 调用 `retrieve_patient_records` 工具获取该病人的最新历史病历原文。
+    2. 检索指南：提取病历中的关键诊断或用户描述的症状，指令 Dispatcher 调用 `retrieve_context_from_db` 工具检索相关的 RAG 临床医疗指南。
+    3. 综合分析：结合检索到的指南与病人的真实病历，给出连贯、专业的医疗建议。完成后回复 "EXECUTION_COMPLETE"。
 
-    【重要：防循环逻辑】
-    - 你必须维护一个内心的“检查清单”：
-      1. 是否已获得影像特征？(通过 generate_report_from_image)
-      2. 是否已计算 TI-RADS？(通过 run_clinical_calculation)
-      3. 是否已检索指南？(通过 retrieve_context_from_db)
-    - **禁止复读**：如果 Dispatcher 已经返回了工具结果，严禁再次下达相同的工具调用指令。
-    - **立即总结**：一旦 `retrieve_context_from_db` 返回了指南内容，你必须立刻结合之前算出的 TI-RADS 分数给出最终诊断建议，严禁再次调用任何工具。
+    === 场景二：全新超声影像诊断（含图片） ===
+    如果用户的输入中包含图片路径或明确的超声影像截图：
+    1. 影像分析：指令 Dispatcher 调用影像处理相关工具（如 `generate_report_from_image`）对该图片进行特征提取和 TI-RADS 评级。
+    2. 检索指南：基于影像得出的 TI-RADS 级别或结节特征，指令 Dispatcher 调用 `retrieve_context_from_db` 获取该级别的处置规范。
+    3. 综合报告：结合影像特征和医疗规范给出诊断报告。完成后回复 "EXECUTION_COMPLETE"。
 
-    【甲状腺专科流水线 SOP】
-    1. 提取特征 -> 2. 计算 TI-RADS (formula_name='ti-rads') -> 3. 检索指南 -> 4. 给出最终诊断。
+    【兜底规则】
+    如果用户的提问既不包含图片，也没有提及具体的病人名字让你查病历，仅仅是一般的医疗常识提问：
+    你可以直接指令 Dispatcher 调用 `retrieve_context_from_db` 查阅知识库后回答，或者基于你的医学知识库直接给出建议。绝不要在没有图片时强行要求用户上传图片，除非你认为该诊断必须依赖最新的影像支持。
 
-    【重要:特征提取强制词汇表】
-    当要求 Dispatcher 调用 `run_clinical_calculation` 工具时，传入的特征值（values）必须**一字不差**地从以下列表中选择，绝不能使用英文或近义词：
-    - composition (成份): 只能选 "囊性", "蜂窝状", "无回声", "混合实性", "实性"
-    - echogenicity (回声): 只能选 "无回声", "高回声", "等回声", "低回声", "极低回声"
-    - shape (形状): 只能选 "宽大于高", "高大于宽"
-    - margin (边缘): 只能选 "光滑", "局限", "分叶", "不规则", "腺体外侵犯"
-    - echogenic_foci (局灶性强回声): 只能选 "无", "大彗星尾", "粗钙化", "周边钙化", "点状强回声"
+    【全局计划与多轮状态追踪 (防循环与流水线控制)】
+    在处理任何请求时，你必须构建并动态维护一个内心的“检查清单”和“诊疗计划”。
+    甲状腺专科强制流水线 SOP 如下：
+    1. 提取特征 (通过 generate_report_from_image) 
+    2. 计算 TI-RADS (通过 list_available_calculations -> run_clinical_calculation, formula_name='ti-rads') 
+    3. 检索指南 (通过 retrieve_context_from_db) 
+    4. 给出最终诊断建议。
+    
+    - 初始规划：在对话的第一轮，明确上述流水线计划。
+    - 防循环与进度更新：每次收到 Dispatcher_Agent 返回的新信息后，更新计划进度。**严禁复读**：如果 Dispatcher 已经返回了某一步的工具结果，严禁再次下达相同的工具调用指令。
+    - 强制终结：一旦 `retrieve_context_from_db` 返回了指南内容，说明信息已齐备。你必须立刻结合之前算出的 TI-RADS 分数给出最终诊断建议，严禁再次调用任何工具，并直接输出 `EXECUTION_COMPLETE`。
 
-    - **禁止复读**：收到“【指南库检索结果已送达】”后，说明信息已齐备。
-    - **强制终结**：收到指南后，立刻结合分数和建议写出总结，并回复 `EXECUTION_COMPLETE`。
+    你的工作循环如下：
+    分析现状：仔细阅读完整的对话历史，包括用户的原始问题、你既定的计划进度，和你已经收集到的所有工具返回结果。
+    决策下一步：根据下面的【决策优先级规则】和当前计划进度，决定下一步需要获取什么信息，或者是否需要修改计划。
+    下达指令：将你的决策，以清晰的自然语言指令形式，传达给你的助手Dispatcher_Agent。
+    检测异常：如果Dispatcher_Agent返回异常，则直接结束后续的传达，输出EXECUTION_COMPLETE
+    
+    【决策优先级规则 (必须严格遵守)】
+    (这里的优先级规则和之前一样：病人优先 -> 计算/影像分析 -> 知识库 -> 网页)，不要使用网页搜索来检索病人的名字，这是被禁止的
+    
+    【病历分析标准作业程序 (SOP)】
+    当用户要求你分析特定病人的历史病历（例如：“帮我分析一下王五的病历”）时，你必须按顺序执行：
+    1. 收集病史：指令 Dispatcher 调用 `retrieve_patient_records` 工具获取该病人的最新病历。
+    2. 检索指南：获取到病历后，指令 Dispatcher 调用 `retrieve_context_from_db` 工具检索相关的临床医疗指南。
+    3. 综合分析：结合检索到的医疗指南与该病人的真实病历，给出连贯、专业的建议，然后回复 EXECUTION_COMPLETE。
 
-    【输出格式约束】
-    - 你的回复只能是：给 Dispatcher 的指令 **或者** 单词 `EXECUTION_COMPLETE`。
-    - 严禁输出 <think> 标签或任何自我解释。
+    【极其严格的输出规则】
+    你的回复**必须是**以下三种格式之一，绝对不能包含任何其他文字、解释、思考过程或标签：
+    
+    格式一 (推进流水线与下达指令): 当你需要推进任务且有影像提供时，必须严格按照以下两行格式输出：
+    [当前计划]: (简述你制定的SOP计划，当前执行到了哪一步。如果因为新信息触发了分支，请说明计划的更改)
+    [下一步指令]: (给Dispatcher_Agent的一句明确指令。例如："请调用 run_clinical_calculation 工具，传入甲状腺特征计算得分。")
+    
+    格式二 (结束任务): 当你判断所有信息都已收集完毕（如指南已检索并总结完毕），或者发生无法克服的异常时，你的回复**必须是且仅是**单词 `EXECUTION_COMPLETE`。
+    
+    格式三 (开场无影像提醒): 如前文【开场引导规则】所述，回复系统提示词及简答后，附带 `EXECUTION_COMPLETE`。
+
+    重复一遍，你的最终输出中，绝对禁止出现 `<think>` 标签或任何形式的自我解释。严令禁止回复其他内容。
+    
+    目前有如下工具：
+        
+    【临床计算】
+    - list_available_calculations(): **这是第一步！** 当用户的请求涉及任何形式的计算、评分或公式时，你必须首先调用此工具来查看有哪些可用的计算。
+    - run_clinical_calculation(formula_name: str, params: dict): 在你通过list_available_calculations确认了要使用的公式后，用这个工具来执行计算。
+        【重要: 特征提取强制词汇表】
+        当要求 Dispatcher 调用此计算工具进行甲状腺评估时，传入的特征值（params）必须**一字不差**地从以下列表中选择，绝不能使用英文或近义词：
+        - composition (成份): 只能选 "囊性", "蜂窝状", "无回声", "混合实性", "实性"
+        - echogenicity (回声): 只能选 "无回声", "高回声", "等回声", "低回声", "极低回声"
+        - shape (形状): 只能选 "宽大于高", "高大于宽"
+        - margin (边缘): 只能选 "光滑", "局限", "分叶", "不规则", "腺体外侵犯"
+        - echogenic_foci (局灶性强回声): 只能选 "无", "大彗星尾", "粗钙化", "周边钙化", "点状强回声"
+        
+    【数据查询】
+    - retrieve_context_from_db(query: str): 从通用医疗知识库中检索信息。
+    - retrieve_patient_records(patient_name: str, query_content: str): 查询指定病人的病历。
+    - search_web(query: str): 搜索最新的网络信息。
+        
+    【影像分析】
+    - summarize_medical_report(image_path: str, report_text: str): 总结已有的图文报告。
+    - generate_report_from_image(image_path: str, requested_focus: str): 从新影像生成报告。
+    
+    禁止调用不存在的工具。
     """
 )
 
@@ -224,13 +307,16 @@ def setup_agent_tools(tool_executor: ToolExecutor):
     
     descriptions = {
         "retrieve_context_from_db": "从医疗知识库中检索通用的医学知识。",
-        "retrieve_patient_records": "查询指定病人的病历信息。",
+        "retrieve_patient_records": "【核心工具】当用户提到要分析某位病人（如'王五'）的病情、病历或历史记录时，必须第一时间调用此工具获取病历原文。",
         "search_web": "执行网页搜索以获取最新医学研究或罕见病信息。",
         "summarize_medical_report": "阅读一份已有的医学报告（包含图片路径和文本内容），并生成该报告的摘要。",
         "generate_report_from_image": "根据一张新的医学影像图片（需要提供图片路径），生成一份全新的诊断报告文本。",
         "list_available_calculations": "当需要进行任何临床或生理学计算（如风险评分、肾功能、电解质校正等）时，首先调用此工具。它会返回一个所有可用计算公式的列表，以及每个公式的用途和所需参数的描述。",
         "run_clinical_calculation": "根据 'formula_name' 执行一个精确的临床计算。你必须先通过 `list_available_calculations` 工具确认 `formula_name` 是有效的，并且了解它需要哪些参数。将所有必需的参数打包在 'params' 字典中。"
     }
+
+    # 【核心修复 1】创建一个字典，专门用来收集真实的执行函数
+    executor_function_map = {}
 
     for name, method in tool_map.items():
         rich_description = descriptions.get(name, "No description available.")
@@ -242,6 +328,10 @@ def setup_agent_tools(tool_executor: ToolExecutor):
         # 将这个新的、绑定了正确 method 的包装函数注册给AutoGen
         Dispatcher_Agent.register_for_llm(name=name, description=rich_description)(tool_wrapper)
         Human_User_Proxy.register_for_execution(name=name)(tool_wrapper)
+        Chief_Medical_Officer.register_for_llm(name=name, description=rich_description)(tool_wrapper)
+    
+    # 【核心修复 2】使用最底层、最稳妥的方法，一次性将完整的函数映射表注入代码执行器
+    Human_User_Proxy.register_function(function_map=executor_function_map)
 
 groupchat = GroupChat(
     agents=[Human_User_Proxy, Chief_Medical_Officer, Dispatcher_Agent, Summarizer_Agent],

@@ -59,6 +59,7 @@ async def get_imaging_summary(request: ImagingSummaryRequest, executor: ToolExec
 
 class MedicalRecordRequest(BaseModel):
     patient_name: str
+    chat_context: str  # 【新增】接收前端传来的对话上下文
 
 @app.post("/api/v1/medical_record/generate", tags=["Structured Services"])
 async def generate_medical_record(request: MedicalRecordRequest, executor: ToolExecutor = Depends(get_tool_executor)):
@@ -70,6 +71,7 @@ async def generate_medical_record(request: MedicalRecordRequest, executor: ToolE
     # 这对于生成固定文档的场景是合适的。
     result = medical_record_service.run_record_generation_workflow(
         patient_name=request.patient_name,
+        chat_context=request.chat_context,
         tool_executor=executor
     )
     return result

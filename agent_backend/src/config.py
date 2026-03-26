@@ -2,15 +2,17 @@
 from pathlib import Path
 
 # --- 1. 定义千问 API 的基础信息 ---
-qwen_api_key = "sk-c305adc976b3489f90458ebe54356d9c"
-qwen_base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+qwen_api_key = "sk-sp-4e0407c0baa84159a38ae03d88fc5d68"
+qwen_base_url = "https://coding.dashscope.aliyuncs.com/v1"
 
+#https://dashscope.aliyuncs.com/compatible-mode/v1
+#sk-c305adc976b3489f90458ebe54356d9c
 # --- 2. 核心大模型配置 (保留原变量名 OLLAMA_LLM_CONFIG) ---
 # 用于需要强大推理能力的 Agent（原先指向本地大模型，现指向 qwen-max）
 OLLAMA_LLM_CONFIG = {
     "config_list": [
         {
-            "model": "qwen-max", 
+            "model": "qwen3.5-plus", 
             "base_url": qwen_base_url,
             "api_key": qwen_api_key,
         }
@@ -28,7 +30,7 @@ OLLAMA_SMALL_LLM_CONFIG = OLLAMA_LLM_CONFIG
 OLLAMA_VLM_CONFIG = {
     "config_list": [
         {
-            "model": "qwen-vl-max",
+            "model": "qwen3.5-plus",
             "base_url": qwen_base_url,
             "api_key": qwen_api_key,
         }
