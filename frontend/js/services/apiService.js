@@ -370,6 +370,52 @@ const apiService = {
   },
 
   /**
+   * 甲状腺筛查（病人端结构化采集 + 影像/报告上传）
+   * 说明：调用后端专用接口，流程为“先入库 -> TI-RADS真实计算 -> AI建议”
+   *
+   * @param {Object} payload 结构化信息（年龄/性别/TSH/危险因素/TI-RADS特征/报告文本）
+   * @param {Array<File>} files 影像或报告文件
+   * @returns {Promise<{answer: string, tiRads: Object, payloadEcho: Object}>}
+   */
+  submitThyroidScreening: async function(payload, files = []) {
+    try {
+      // 调用专用后端接口：先入库 + TI-RADS真实计算 + 再调用AI
+      const token = localStorage.getItem('access_token');
+      if (!token) throw new Error('用户未登录或token已过期');
+      const formData = new FormData();
+      formData.append('screening_payload', JSON.stringify(payload || {}));
+      (files || []).forEach(f => formData.append('files', f));
+
+      const response = await fetch(`${API_BASE_URL}/chat/thyroid/screening`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+        body: formData,
+        credentials: 'include'
+      });
+      if (response.status === 401) {
+        localStorage.removeItem('access_token');
+        throw new Error('登录已过期，请重新登录');
+      }
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || response.statusText);
+      }
+      const data = await response.json();
+      const answer = data.answer || '';
+      const tiRads = data.tiRads || null;
+
+      return {
+        answer,
+        tiRads,
+        payloadEcho: payload
+      };
+    } catch (error) {
+      console.error('submitThyroidScreening 调用失败:', error.message);
+      throw error;
+    }
+  },
+
+  /**
    * 创建AI问诊历史对话记录
    * 后端接口：POST /api/history/create
    * @param {string} question 用户问题

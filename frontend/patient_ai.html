@@ -147,6 +147,9 @@
 
       <!-- 新增的功能按钮区域 -->
       <div class="flex items-center gap-3 mb-3">
+        <button id="thyroid-screening" class="px-4 py-2 bg-patient-500 text-white rounded-lg text-sm font-medium hover:bg-patient-600 transition-300 flex items-center shadow-sm">
+          <i class="fa fa-search mr-2"></i>甲状腺筛查
+        </button>
         <button id="generate-medical-record" class="px-4 py-2 bg-patient-500 text-white rounded-lg text-sm font-medium hover:bg-patient-600 transition-300 flex items-center shadow-sm">
           <i class="fa fa-file-text-o mr-2"></i>生成病历
         </button>
@@ -214,6 +217,7 @@
       const filePreviewList = document.getElementById('file-preview-list');
       const newChatBtn = document.getElementById('new-chat-btn');
       const generateRecordBtn = document.getElementById('generate-medical-record');
+      const thyroidScreeningBtn = document.getElementById('thyroid-screening');
       if (generateRecordBtn) {
         generateRecordBtn.addEventListener('click', handleGenerateMedicalRecord);
       }
@@ -397,6 +401,28 @@
         chatMessages.appendChild(aiMsgDiv);
         scrollToLatestMessage();
         return aiMsgDiv; // 返回创建的元素，便于后续可能的删除操作
+      }
+
+      // 渲染带浅色提示语的AI消息（用于医疗免责声明）
+      function renderAiMessageWithHint(content, hint, time) {
+        const timeStr = formatTime(time);
+        const aiMsgDiv = document.createElement('div');
+        aiMsgDiv.className = 'flex items-start message-appear';
+        aiMsgDiv.innerHTML = `
+          <div class="w-9 h-9 rounded-full bg-gradient-to-br from-patient-500 to-doctor-500 flex items-center justify-center flex-shrink-0 mr-3">
+            <i class="fa fa-user-md text-white"></i>
+          </div>
+          <div class="max-w-[80%]">
+            <div class="bg-patient-50 p-4 rounded-lg rounded-tl-none border border-patient-100">
+              <p>${escapeHtml(content)}</p>
+              <p class="text-xs text-neutral-400 mt-2">${escapeHtml(hint)}</p>
+            </div>
+            <p class="text-xs text-neutral-400 mt-1">${timeStr}</p>
+          </div>
+        `;
+        chatMessages.appendChild(aiMsgDiv);
+        scrollToLatestMessage();
+        return aiMsgDiv;
       }
 
       // 9. 渲染错误提示（复用函数）
@@ -598,6 +624,162 @@
       // 15. 初始化：加载历史记录
       loadHistoryChats();
 
+      // 15.1 甲状腺筛查：弹窗表单 + 连接后端（复用 /api/chat/medical/upload）
+      if (thyroidScreeningBtn) {
+        thyroidScreeningBtn.addEventListener('click', openThyroidScreeningModal);
+      }
+
+      function openThyroidScreeningModal() {
+        // 刷新对话框：开启新会话 + 清空当前消息区
+        (async () => {
+          try {
+            await apiService.startNewMedicalChat();
+          } catch (e) {
+            // 即使后端新会话失败，也继续打开表单；用户仍可提交筛查
+            console.warn('startNewMedicalChat failed:', e?.message || e);
+          }
+
+          if (chatMessages) {
+            chatMessages.innerHTML = '';
+          }
+          // 打招呼 + 提示
+          addInitialAiMessage();
+          renderAiMessage('我将引导您完成甲状腺结节/甲状腺筛查信息填写。请尽量上传超声影像或检查报告，以便给出更可靠的建议。', new Date());
+
+          showThyroidModal();
+        })();
+      }
+
+      function showThyroidModal() {
+        const modal = document.getElementById('thyroid-modal');
+        if (!modal) return;
+        resetThyroidErrors();
+        modal.classList.remove('hidden');
+        document.body.classList.add('overflow-hidden');
+      }
+
+      function hideThyroidModal() {
+        const modal = document.getElementById('thyroid-modal');
+        if (!modal) return;
+        modal.classList.add('hidden');
+        document.body.classList.remove('overflow-hidden');
+      }
+
+      function resetThyroidErrors() {
+        document.querySelectorAll('.thy-field').forEach(el => {
+          el.classList.remove('border-danger', 'focus:ring-danger/20', 'focus:border-danger');
+        });
+        document.querySelectorAll('.thy-error').forEach(el => {
+          el.textContent = '';
+          el.classList.add('hidden');
+        });
+      }
+
+      function setThyFieldError(fieldId, message) {
+        const input = document.getElementById(fieldId);
+        const err = document.getElementById(`err_${fieldId}`);
+        if (input) {
+          input.classList.add('border-danger', 'focus:ring-danger/20', 'focus:border-danger');
+        }
+        if (err) {
+          err.textContent = message;
+          err.classList.remove('hidden');
+        }
+      }
+
+      async function submitThyroidScreening() {
+        const ageEl = document.getElementById('thy_age');
+        const sexEl = document.getElementById('thy_sex');
+        const tshEl = document.getElementById('thy_tsh');
+        const radEl = document.getElementById('thy_radiation');
+        const famEl = document.getElementById('thy_family');
+        const compEl = document.getElementById('thy_comp');
+        const echoEl = document.getElementById('thy_echo');
+        const shapeEl = document.getElementById('thy_shape');
+        const marginEl = document.getElementById('thy_margin');
+        const fociEl = document.getElementById('thy_foci');
+        const reportEl = document.getElementById('thy_report_text');
+        const filesEl = document.getElementById('thy_files');
+
+        const age = ageEl?.value?.trim();
+        const sex = sexEl?.value;
+        const tsh = tshEl?.value?.trim();
+        const neckRadiation = radEl?.value;
+        const familyHx = famEl?.value;
+
+        const characteristics = {
+          composition: compEl?.value,
+          echogenicity: echoEl?.value,
+          shape: shapeEl?.value,
+          margin: marginEl?.value,
+          echogenic_foci: fociEl?.value
+        };
+
+        const reportText = reportEl?.value?.trim() || '';
+        const files = Array.from(filesEl?.files || []);
+
+        resetThyroidErrors();
+        let hasError = false;
+
+        if (!age || isNaN(Number(age)) || Number(age) < 0 || Number(age) > 120) {
+          setThyFieldError('thy_age', '请填写正确年龄（0-120）');
+          hasError = true;
+        }
+        if (!sex) {
+          setThyFieldError('thy_sex', '请选择性别');
+          hasError = true;
+        }
+        if (!characteristics.composition) { setThyFieldError('thy_comp', '请选择成份'); hasError = true; }
+        if (!characteristics.echogenicity) { setThyFieldError('thy_echo', '请选择回声'); hasError = true; }
+        if (!characteristics.shape) { setThyFieldError('thy_shape', '请选择形状'); hasError = true; }
+        if (!characteristics.margin) { setThyFieldError('thy_margin', '请选择边缘'); hasError = true; }
+        if (!characteristics.echogenic_foci) { setThyFieldError('thy_foci', '请选择局灶性强回声'); hasError = true; }
+        if (!reportText && files.length === 0) {
+          setThyFieldError('thy_report_text', '请填写报告文本或上传影像/报告');
+          hasError = true;
+        }
+        if (hasError) return;
+
+        hideThyroidModal();
+
+        const now = new Date();
+        renderUserMessage('已提交【甲状腺筛查】信息', now);
+
+        // 显示“正在处理”提示
+        renderAiMessage('正在进行TI-RADS评分与风险初筛，并生成可解释建议...', now);
+
+        try {
+          const payload = {
+            age: Number(age),
+            sex,
+            tsh: tsh === '' ? null : Number(tsh),
+            neck_radiation_exposure: neckRadiation === 'yes',
+            family_thyroid_cancer_history: familyHx === 'yes',
+            characteristics,
+            report_text: reportText
+          };
+
+          const result = await apiService.submitThyroidScreening(payload, files);
+
+          const tirads = result?.tiRads;
+          const toolBlock = tirads
+            ? `【TI-RADS工具评分】\n- 积分：${tirads['TI_RADS积分']}\n- 分级：${tirads['TI_RADS分级']}\n- 恶性风险概率：${tirads['惡性风险概率']}\n- 建议：${tirads['指南建议管理方案']}\n`
+            : '';
+
+          const answer = result?.answer || '未获得AI返回内容';
+          renderAiMessageWithHint(
+            `${toolBlock}\n【AI建议】\n${answer}`,
+            '以上内容由AI生成，仅供参考；如有不适请及时就医。',
+            new Date()
+          );
+        } catch (error) {
+          renderErrorMsg(`甲状腺筛查失败：${error.message || error}`);
+        }
+      }
+
+      // 暴露给弹窗按钮 onclick 调用
+      window.__submitThyroidScreening = submitThyroidScreening;
+
       // 16. 核心：消息发送功能
       async function sendMessage() {
         const messageContent = messageInput.value ? messageInput.value.trim() : '';
@@ -774,5 +956,154 @@
       console.log('AI聊天功能初始化完成，可正常发送消息');
     });
   </script>
+
+  <!-- 甲状腺筛查弹窗（结构化信息采集） -->
+  <div id="thyroid-modal" class="hidden fixed inset-0 z-50">
+    <div class="absolute inset-0 bg-black/40" onclick="document.getElementById('thyroid-modal').classList.add('hidden'); document.body.classList.remove('overflow-hidden');"></div>
+    <div class="absolute inset-0 flex items-center justify-center p-4">
+      <div class="bg-white w-full max-w-2xl rounded-2xl shadow-xl overflow-hidden">
+        <div class="p-4 border-b border-neutral-200 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <div class="w-9 h-9 rounded-xl bg-patient-50 flex items-center justify-center">
+              <i class="fa fa-search text-patient-600"></i>
+            </div>
+            <div>
+              <div class="font-semibold text-neutral-800">甲状腺筛查信息填写</div>
+              <div class="text-xs text-neutral-500">用于TI-RADS评分与初步建议生成（可上传超声影像/报告）</div>
+            </div>
+          </div>
+          <button class="text-neutral-500 hover:text-neutral-700" onclick="document.getElementById('thyroid-modal').classList.add('hidden'); document.body.classList.remove('overflow-hidden');">
+            <i class="fa fa-times text-xl"></i>
+          </button>
+        </div>
+
+        <div class="p-4 max-h-[70vh] overflow-y-auto">
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs text-neutral-600 mb-1">年龄（必填）</label>
+              <input id="thy_age" class="thy-field w-full px-3 py-2 rounded-lg border border-neutral-200 focus:ring-2 focus:ring-patient-500/20 focus:border-patient-500 outline-none" placeholder="如 45" inputmode="numeric" />
+              <p id="err_thy_age" class="thy-error hidden mt-1 text-xs text-danger"></p>
+            </div>
+            <div>
+              <label class="block text-xs text-neutral-600 mb-1">性别（必选）</label>
+              <select id="thy_sex" class="thy-field w-full px-3 py-2 rounded-lg border border-neutral-200 focus:ring-2 focus:ring-patient-500/20 focus:border-patient-500 outline-none">
+                <option value="">请选择</option>
+                <option value="F">女</option>
+                <option value="M">男</option>
+                <option value="U">其他/未知</option>
+              </select>
+              <p id="err_thy_sex" class="thy-error hidden mt-1 text-xs text-danger"></p>
+            </div>
+            <div>
+              <label class="block text-xs text-neutral-600 mb-1">TSH（mIU/L，可选）</label>
+              <input id="thy_tsh" class="thy-field w-full px-3 py-2 rounded-lg border border-neutral-200 focus:ring-2 focus:ring-patient-500/20 focus:border-patient-500 outline-none" placeholder="如 1.8" inputmode="decimal" />
+              <p id="err_thy_tsh" class="thy-error hidden mt-1 text-xs text-danger"></p>
+            </div>
+            <div>
+              <label class="block text-xs text-neutral-600 mb-1">颈部放射线暴露史（可选）</label>
+              <select id="thy_radiation" class="thy-field w-full px-3 py-2 rounded-lg border border-neutral-200 focus:ring-2 focus:ring-patient-500/20 focus:border-patient-500 outline-none">
+                <option value="no">无/不确定</option>
+                <option value="yes">有</option>
+              </select>
+              <p id="err_thy_radiation" class="thy-error hidden mt-1 text-xs text-danger"></p>
+            </div>
+            <div>
+              <label class="block text-xs text-neutral-600 mb-1">家族甲状腺癌病史（可选）</label>
+              <select id="thy_family" class="thy-field w-full px-3 py-2 rounded-lg border border-neutral-200 focus:ring-2 focus:ring-patient-500/20 focus:border-patient-500 outline-none">
+                <option value="no">无/不确定</option>
+                <option value="yes">有</option>
+              </select>
+              <p id="err_thy_family" class="thy-error hidden mt-1 text-xs text-danger"></p>
+            </div>
+            <div>
+              <label class="block text-xs text-neutral-600 mb-1">上传超声影像/报告（图片/PDF）</label>
+              <input id="thy_files" type="file" multiple accept="image/*,.pdf" class="thy-field w-full text-sm" />
+              <p id="err_thy_files" class="thy-error hidden mt-1 text-xs text-danger"></p>
+            </div>
+          </div>
+
+          <div class="mt-4 p-3 rounded-xl bg-neutral-50 border border-neutral-200">
+            <div class="flex items-center justify-between mb-2">
+              <div class="font-medium text-neutral-800 text-sm">超声TI-RADS五大维度特征（建议填写）</div>
+              <span class="text-xs text-neutral-500">参考 ACR TI-RADS 2017</span>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label class="block text-xs text-neutral-600 mb-1">成份</label>
+                <select id="thy_comp" class="thy-field w-full px-3 py-2 rounded-lg border border-neutral-200 focus:ring-2 focus:ring-patient-500/20 focus:border-patient-500 outline-none">
+                  <option value="">请选择</option>
+                  <option value="囊性">囊性</option>
+                  <option value="蜂窝状">蜂窝状</option>
+                  <option value="混合实性">混合实性</option>
+                  <option value="实性">实性</option>
+                </select>
+                <p id="err_thy_comp" class="thy-error hidden mt-1 text-xs text-danger"></p>
+              </div>
+              <div>
+                <label class="block text-xs text-neutral-600 mb-1">回声</label>
+                <select id="thy_echo" class="thy-field w-full px-3 py-2 rounded-lg border border-neutral-200 focus:ring-2 focus:ring-patient-500/20 focus:border-patient-500 outline-none">
+                  <option value="">请选择</option>
+                  <option value="无回声">无回声</option>
+                  <option value="高回声">高回声</option>
+                  <option value="等回声">等回声</option>
+                  <option value="低回声">低回声</option>
+                  <option value="极低回声">极低回声</option>
+                </select>
+                <p id="err_thy_echo" class="thy-error hidden mt-1 text-xs text-danger"></p>
+              </div>
+              <div>
+                <label class="block text-xs text-neutral-600 mb-1">形状</label>
+                <select id="thy_shape" class="thy-field w-full px-3 py-2 rounded-lg border border-neutral-200 focus:ring-2 focus:ring-patient-500/20 focus:border-patient-500 outline-none">
+                  <option value="">请选择</option>
+                  <option value="宽大于高">宽大于高</option>
+                  <option value="高大于宽">高大于宽</option>
+                </select>
+                <p id="err_thy_shape" class="thy-error hidden mt-1 text-xs text-danger"></p>
+              </div>
+              <div>
+                <label class="block text-xs text-neutral-600 mb-1">边缘</label>
+                <select id="thy_margin" class="thy-field w-full px-3 py-2 rounded-lg border border-neutral-200 focus:ring-2 focus:ring-patient-500/20 focus:border-patient-500 outline-none">
+                  <option value="">请选择</option>
+                  <option value="光滑">光滑</option>
+                  <option value="局限">局限</option>
+                  <option value="分叶">分叶</option>
+                  <option value="不规则">不规则</option>
+                  <option value="腺体外侵犯">腺体外侵犯</option>
+                </select>
+                <p id="err_thy_margin" class="thy-error hidden mt-1 text-xs text-danger"></p>
+              </div>
+              <div class="md:col-span-2">
+                <label class="block text-xs text-neutral-600 mb-1">局灶性强回声（钙化等）</label>
+                <select id="thy_foci" class="thy-field w-full px-3 py-2 rounded-lg border border-neutral-200 focus:ring-2 focus:ring-patient-500/20 focus:border-patient-500 outline-none">
+                  <option value="">请选择</option>
+                  <option value="无">无</option>
+                  <option value="大彗星尾">大彗星尾</option>
+                  <option value="粗钙化">粗钙化</option>
+                  <option value="周边钙化">周边钙化</option>
+                  <option value="点状强回声">点状强回声</option>
+                </select>
+                <p id="err_thy_foci" class="thy-error hidden mt-1 text-xs text-danger"></p>
+              </div>
+            </div>
+          </div>
+
+          <div class="mt-4">
+            <label class="block text-xs text-neutral-600 mb-1">报告文本（可选，建议粘贴超声结论与描述）</label>
+            <textarea id="thy_report_text" rows="4" class="thy-field w-full px-3 py-2 rounded-lg border border-neutral-200 focus:ring-2 focus:ring-patient-500/20 focus:border-patient-500 outline-none" placeholder="如：结节大小、组成、回声、形态、边界、钙化、血流、TI-RADS提示..."></textarea>
+            <p id="err_thy_report_text" class="thy-error hidden mt-1 text-xs text-danger"></p>
+          </div>
+        </div>
+
+        <div class="p-4 border-t border-neutral-200 flex items-center justify-end gap-3 bg-white">
+          <button class="px-4 py-2 rounded-lg bg-neutral-100 text-neutral-700 text-sm font-medium hover:bg-neutral-200 transition-300" onclick="document.getElementById('thyroid-modal').classList.add('hidden'); document.body.classList.remove('overflow-hidden');">
+            取消
+          </button>
+          <button class="px-4 py-2 rounded-lg bg-patient-500 text-white text-sm font-medium hover:bg-patient-600 transition-300" onclick="window.__submitThyroidScreening && window.__submitThyroidScreening()">
+            提交筛查
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
 </body>
 </html>

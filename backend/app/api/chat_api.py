@@ -1,5 +1,7 @@
 import os
 import logging
+import json
+import sys
 from datetime import datetime
 from flask import Blueprint, jsonify, request, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
@@ -14,6 +16,8 @@ from ..services.history_service import (
     start_new_chat_session, 
     generate_medical_record_from_history
 )
+from ..models.consultation_model import ChatMessageModel
+from ..core.extensions import db
 
 # 创建 'chat_bp' 蓝图
 chat_bp = Blueprint('chat_api', __name__, url_prefix='/api/chat')
@@ -26,6 +30,18 @@ def allowed_file(filename):
     return '.' in filename and \
            filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 # --------------------------
+
+def calculate_tirads_with_agent_tool(characteristics):
+    """
+    调用 agent_backend 中的甲状腺 TI-RADS 工具进行真实计算。
+    """
+    # 将 repo/agent_backend/src 加入 sys.path（避免部署路径差异）
+    agent_src = os.path.abspath(os.path.join(current_app.root_path, '..', '..', 'agent_backend', 'src'))
+    if agent_src not in sys.path:
+        sys.path.append(agent_src)
+
+    from tools.medical_calculator.formulas.thyroid import calculate_thyroid_ti_rads
+    return calculate_thyroid_ti_rads(characteristics or {})
 
 #这个是按照分对话块的方式写的
 """
@@ -179,6 +195,100 @@ def chat_medical_upload():
         logging.error(f"Error in /api/chat/medical/upload: {e}", exc_info=True)
         return jsonify({"error_code": 500, "message": "服务器内部错误"}), 500
 # --- API #11 结束 ---
+
+# --- 新增：甲状腺筛查结构化提交（先入库，再调用AI） ---
+@chat_bp.route('/thyroid/screening', methods=['POST'])
+@jwt_required()
+def thyroid_screening_submit():
+    """
+    提交甲状腺筛查结构化表单：
+    1) 先将结构化表单+上传文件URL写入数据库聊天记录
+    2) 再调用AI接口生成建议
+    3) 返回数据结构与前端当前消费保持兼容（answer字段不变）
+    """
+    try:
+        user_id = get_jwt_identity()
+
+        screening_payload_str = request.form.get('screening_payload')
+        if not screening_payload_str:
+            return jsonify({"error_code": 400, "message": "缺少screening_payload参数"}), 400
+
+        try:
+            screening_payload = json.loads(screening_payload_str)
+        except Exception:
+            return jsonify({"error_code": 400, "message": "screening_payload不是合法JSON"}), 400
+
+        files = request.files.getlist('files')
+        file_urls = []
+
+        # 文件保存逻辑与 /medical/upload 一致
+        upload_folder = os.path.join(current_app.root_path, '..', 'uploads', 'chat_files')
+        os.makedirs(upload_folder, exist_ok=True)
+
+        for file in files:
+            if file and allowed_file(file.filename):
+                filename = secure_filename(f"{user_id}_{datetime.utcnow().timestamp():.0f}_{file.filename}")
+                file_path_on_disk = os.path.join(upload_folder, filename)
+                file.save(file_path_on_disk)
+
+                db_file_path = os.path.join('uploads', 'chat_files', filename).replace('\\', '/')
+                public_url = f"{request.host_url}{db_file_path}"
+                file_urls.append(public_url)
+            elif file:
+                logging.warning(f"Skipped disallowed file in thyroid screening: {file.filename}")
+
+        latest_consultation = find_or_create_main_ai_consultation(user_id)
+
+        # 1) 真实调用 TI-RADS 评分工具
+        ti_rads_result = calculate_tirads_with_agent_tool(
+            screening_payload.get('characteristics', {})
+        )
+
+        # 2) 构造呈现给前端的历史记录的“人类可读纯文本”（不再存JSON！）
+        chars = screening_payload.get("characteristics", {})
+        age = screening_payload.get("age", "未知")
+        sex = screening_payload.get("sex", "未知")
+        report_text = screening_payload.get("report_text", "")
+
+        display_question = "已提交【甲状腺筛查】信息：\n"
+        display_question += f"- 基本信息：{age}岁，性别 {sex}\n"
+        display_question += f"- 超声特征：成分={chars.get('composition', '无')}、回声={chars.get('echogenicity', '无')}、形状={chars.get('shape', '无')}、边缘={chars.get('margin', '无')}、局灶性强回声={chars.get('echogenic_foci', '无')}\n"
+        if report_text:
+            display_question += f"- 报告描述：{report_text}\n"
+        if file_urls:
+            display_question += f"- 附件资料：已上传 {len(file_urls)} 个文件\n"
+
+        # 3) 组合发给 AI 进行内部推理的完整上下文 (带全JSON数据)
+        question_to_ai = "\n".join([
+            "用户发起甲状腺筛查。请根据以下结构化数据与辅助工具计算出的结果给出排版清晰、专业保守的建议：",
+            "【甲状腺筛查结构化数据】",
+            json.dumps(screening_payload, ensure_ascii=False),
+            "",
+            "【TI-RADS工具结果】",
+            json.dumps(ti_rads_result, ensure_ascii=False),
+            "",
+            "附件文件URL：",
+            "\n".join(file_urls) if file_urls else "无"
+        ])
+        
+        # 调用 AI 进行回答
+        ai_answer = llm_service.get_ai_response(question_to_ai)
+
+        # 4) 将人类可读的提问(display_question)与 AI 回答直接保存！
+        # 这个 service 操作会同时帮你正确更新会话活跃时间(updated_at)
+        add_chat_message_to_consultation(user_id, latest_consultation.id, display_question, ai_answer)
+
+        return jsonify({
+            "answer": ai_answer,
+            "tiRads": ti_rads_result,
+            "saved": True
+        }), 200
+
+    except Exception as e:
+        db.session.rollback()
+        logging.error(f"Error in /api/chat/thyroid/screening: {e}", exc_info=True)
+        return jsonify({"error_code": 500, "message": "服务器内部错误"}), 500
+# --- 结束 ---
 
 @chat_bp.route('/new', methods=['POST'])
 @jwt_required()
