@@ -204,6 +204,17 @@
               <span class="badge-pill bg-success/10 text-success hidden" id="diagnosis-result"></span> <!-- 实际内容 -->
             </div>
           </div>
+
+          <!-- 影像资料区块 -->
+          <div class="medical-section">
+            <h3 class="medical-record-title">影像资料</h3>
+            <div id="images-container" class="flex flex-wrap gap-4 mt-3">
+              <div class="skeleton-container w-full flex gap-4"> <div class="skeleton h-32 w-32 rounded-lg"></div>
+              </div>
+              <div id="record-images" class="hidden flex flex-wrap gap-4 w-full"></div> 
+            </div>
+          </div>
+
         </div>
         
         <!-- 卡片底部操作区：包含打印和导出功能 -->
@@ -278,6 +289,32 @@
         document.getElementById('family-history').textContent = record.家族史 || '无';
         document.getElementById('diagnosis-result').textContent = record.诊断 || '未完成诊断';
         
+        // 渲染影像资料
+        const imagesContainer = document.getElementById('record-images');
+        imagesContainer.innerHTML = ''; // 先清空
+        
+        // 兼容不同的键名（取决于你的 Schema 序列化后的名字）
+        const imagePathsStr = record.image_paths || record.影像资料; 
+        
+        if (imagePathsStr) {
+            const pathsArray = imagePathsStr.split(',');
+            if (pathsArray.length > 0 && pathsArray[0] !== "") {
+                pathsArray.forEach(path => {
+                    const img = document.createElement('img');
+                    // 拼接后端基础地址 (假设你的图片挂在 localhost:5000 下)
+                    img.src = `http://localhost:5000${path.trim()}`;
+                    img.className = 'w-32 h-32 object-cover rounded-lg border border-neutral-200 shadow-sm cursor-pointer hover:shadow-md transition-300';
+                    // 点击图片可以新标签页查看大图
+                    img.onclick = () => window.open(img.src, '_blank'); 
+                    imagesContainer.appendChild(img);
+                });
+            } else {
+                imagesContainer.innerHTML = '<p class="text-neutral-500 text-sm mt-2">暂无影像资料</p>';
+            }
+        } else {
+            imagesContainer.innerHTML = '<p class="text-neutral-500 text-sm mt-2">暂无影像资料</p>';
+        }
+
         // 更新病历编号和创建时间（与其他信息保持一致的API调用方式）
         document.getElementById('record-id-container').innerHTML = 
           `病历编号: <span class="font-medium text-neutral-700">${record.id || '未知编号'}</span>`;
@@ -309,7 +346,8 @@
       document.querySelectorAll('.skeleton-container').forEach(container => {
         container.classList.add('hidden');
       });
-      document.querySelectorAll('.medical-record-content, #diagnosis-result').forEach(el => {
+      // 【修改】：加上 , #record-images 把它显示出来
+      document.querySelectorAll('.medical-record-content, #diagnosis-result, #record-images').forEach(el => {
         el.classList.remove('hidden');
       });
     }

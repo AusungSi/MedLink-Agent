@@ -2,6 +2,7 @@ import json
 import logging
 import base64
 import os
+import requests
 import chromadb
 from ..config import PATIENT_DB_PATH
 from ..rag_utils import RagUtils
@@ -13,63 +14,61 @@ def retrieve_context_from_db(query: str, rag_util: RagUtils) -> str:
 
 def retrieve_patient_records(patient_name: str, query_content: str, rag_util: RagUtils, in_memory_client: chromadb.Client) -> str:    
     """
-    (动态检索版) 查询指定病人的病历信息。
-    步骤: 1. 提取该病人的全部记录。 2. 动态创建内存向量库。 3. 在库中进行语义搜索。
+    (直连真实数据库的动态检索版) 查询指定病人的病历信息。
+    步骤: 1. 从 Flask API 提取该病人的全部真实病历记录。 2. 动态创建内存向量库。 3. 在库中进行语义搜索。
     """
     logging.info(f"正在为病人 '{patient_name}' 执行【动态检索】，查询: '{query_content}'")
 
-    # --- 第1步: 从原始数据源提取该病人的全部记录 ---
+    # --- 第1步: 通过内部API从真实数据库提取该病人的全部记录 ---
     try:
-        with open(PATIENT_DB_PATH, 'r', encoding='utf-8') as f:
-            all_patients_data = json.load(f)
-    except FileNotFoundError:
-        import os
-        return f"错误：找不到病人数据库文件。尝试查找的路径为: {os.path.abspath(PATIENT_DB_PATH)}。"
-
-    patient_data = all_patients_data.get(patient_name)
-    if not patient_data or not patient_data.get("encounters"):
-        return f"在数据库中未找到病人 '{patient_name}' 的任何就诊记录。"
-
-    patient_encounters = patient_data.get("encounters")
+        url = f"http://127.0.0.1:5000/api/chat/internal/records/{patient_name}"
+        response = requests.get(url, timeout=10)
+        
+        if response.status_code == 404:
+            return f"在数据库中未找到病人 '{patient_name}' 的任何就诊记录。"
+        elif response.status_code != 200:
+            return f"系统提示：查询病历失败，后端返回状态码 {response.status_code}"
+        
+        patient_encounters = response.json()
+        if not patient_encounters:
+             return f"在数据库中未找到病人 '{patient_name}' 的任何就诊记录。"
+             
+    except Exception as e:
+        logging.error(f"❌ 数据库接口连接失败: {e}")
+        return f"系统提示：查询病历时发生网络错误: {str(e)}"
 
     # --- 第2步: 动态地为该病人的记录创建内存向量库 ---
-
-    # 将每一次encounter序列化为文档
     documents = []
     metadatas = []
     ids = []
+    
+    # 将每一次病历序列化为需要 Embed 的纯文本段落
     for encounter in patient_encounters:
         doc_text_parts = []
-        doc_text_parts.append(f"在 {encounter['date']} 的{encounter['encounter_type']}中:")
+        doc_text_parts.append(f"【就诊时间】: {encounter['created_at']}")
+        if encounter.get('chief_complaint'):
+            doc_text_parts.append(f"主诉: {encounter['chief_complaint']}")
+        if encounter.get('history_present_illness'):
+            doc_text_parts.append(f"现病史: {encounter['history_present_illness']}")
+        if encounter.get('past_medical_history'):
+            doc_text_parts.append(f"既往史: {encounter['past_medical_history']}")
         if encounter.get('diagnosis'):
-            doc_text_parts.append(f"诊断为 {encounter['diagnosis']}")
-        if encounter.get('medications'):
-            med_texts = [f"{med['name']}({med['dosage']})" for med in encounter['medications']]
-            doc_text_parts.append(f"用药包括 {', '.join(med_texts)}")
-        if encounter.get('lab_reports'):
-            report_texts = [f"{rep['report_name']}结果是{rep['result_summary']}" for rep in encounter['lab_reports']]
-            doc_text_parts.append(f"检查有 {'; '.join(report_texts)}")
+            doc_text_parts.append(f"诊断结论: {encounter['diagnosis']}")
         
-        final_doc_text = " ".join(doc_text_parts)
+        final_doc_text = "\n".join(doc_text_parts)
         documents.append(final_doc_text)
-        metadatas.append({"date": encounter['date']})
-        ids.append(encounter['encounter_id'])
+        metadatas.append({"date": encounter['created_at']})
+        ids.append(str(encounter['id']))
 
-    # 使用Ollama的Embedding函数接口
-    # 注意: rag_util._get_embedding 是我们自己写的requests版本，这里用一个更通用的方式
-    # 我们需要一个符合chromadb规范的embedding function
-    # 我们可以把rag_util._get_embedding包装一下，或者直接在这里实现
+    # 使用传入的 rag_util 生成 embedding
     def ollama_embed_func(texts: list[str]) -> list[list[float]]:
         return [rag_util._get_embedding(text) for text in texts]
 
     # 对病人姓名进行Base64编码，以生成一个安全的集合名称
     safe_patient_name = base64.urlsafe_b64encode(patient_name.encode('utf-8')).decode('utf-8')
-    collection_name = f"patient-{safe_patient_name}-temp-records" # 使用连字符更常见
+    collection_name = f"patient-{safe_patient_name}-temp-records"[:63]
 
-    # 确保名称长度不会超限（虽然对于base64编码的姓名来说基本不可能）
-    collection_name = collection_name[:63] # ChromaDB v0.4.x 的一个常见长度限制
-
-    logging.info(f"为病人 '{patient_name}' 创建临时集合，安全名称为: '{collection_name}'")
+    logging.info(f"为病人 '{patient_name}' 创建临时集合，包含 {len(documents)} 份历史病历。")
 
     temp_collection = in_memory_client.get_or_create_collection(
         name=collection_name,
@@ -77,7 +76,6 @@ def retrieve_patient_records(patient_name: str, query_content: str, rag_util: Ra
     )
 
     if temp_collection.count() > 0:
-        logging.info(f"集合 '{collection_name}' 中存在旧数据，将执行删除并重建。")
         in_memory_client.delete_collection(name=collection_name)
         temp_collection = in_memory_client.create_collection(name=collection_name)
 
@@ -91,25 +89,22 @@ def retrieve_patient_records(patient_name: str, query_content: str, rag_util: Ra
     )
 
     # --- 第3步: 在这个临时的内存库中进行语义搜索 ---
-    # 步骤 3a: 手动为用户的查询文本生成查询向量
     logging.info(f"正在为查询文本生成 embedding: '{query_content}'")
-    query_embedding = ollama_embed_func([query_content])[0] # ollama_embed_func接收列表，返回列表，所以我们取第一个元素
+    query_embedding = ollama_embed_func([query_content])[0]
 
-    # 步骤 3b: 使用 `query_embeddings` 参数进行查询，而不是 `query_texts`
     if query_embedding:
         results = temp_collection.query(
-            query_embeddings=[query_embedding], # <-- 使用查询向量
-            n_results=min(3, len(documents))
+            query_embeddings=[query_embedding],
+            # 找到最相关的 3 次病历（如果总数不足3次则取总数）
+            n_results=min(3, len(documents)) 
         )
     else:
         logging.error("无法为查询文本生成 embedding，检索失败。")
-        results = None # 或者返回一个空的结果结构
-    # =======================================================
-
+        return "内部错误：无法为查询文本生成语义向量。"
 
     if not results or not results['documents'] or not results['documents'][0]:
-        return f"在病人 '{patient_name}' 的病历中未找到与 '{query_content}' 语义相关的内容。"
+        return f"在病人 '{patient_name}' 的所有病历中，未找到与 '{query_content}' 相关的内容。"
 
-    # 格式化输出
-    context = "\n\n---\n\n".join(results['documents'][0])
-    return f"根据病人 '{patient_name}' 的病历，检索到以下语义最相关的记录：\n{context}"
+    # 格式化输出最终最相关的几份病历返回给大模型
+    context = "\n\n====================\n\n".join(results['documents'][0])
+    return f"根据病人 '{patient_name}' 的历史病历数据库，检索到与“{query_content}”最相关的记录如下：\n\n{context}"

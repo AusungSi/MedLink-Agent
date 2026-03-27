@@ -36,4 +36,6 @@ class MedicalRecordDetailSchema(ma.Schema):
     #
     诊断 = fields.Str(attribute="diagnosis")
     #
+    影像资料 = fields.Str(attribute="image_paths")
+    #
     createdAt = fields.DateTime(attribute="created_at")

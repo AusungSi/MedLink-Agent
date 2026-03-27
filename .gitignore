@@ -35,3 +35,12 @@ medical_documents/*.pdf
 # 忽略前端上传的临时测试图片和对话文件目录
 backend/uploads/chat_files/
 uploads/
+
+# 忽略评测和数据处理脚本
+agent_backend/benchmark_vlm.py
+agent_backend/e2e_benchmark.py
+agent_backend/extract_labels.py
+agent_backend/data/DDTI/split_data.py
+
+# 忽略庞大的 DDTI 数据集及相关文件夹
+agent_backend/data/DDTI/

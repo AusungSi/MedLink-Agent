@@ -11,10 +11,13 @@ import threading # 导入 threading
 FASTAPI_BASE_URL = os.environ.get("FASTAPI_BASE_URL", "http://localhost:8000")
 
 # --- 结构化服务 API 调用 ---
-def generate_structured_medical_record(patient_name: str) -> dict:
+def generate_structured_medical_record(patient_name: str, chat_context: str) -> dict:
     # ... (此函数保持不变) ...
     api_url = f"{FASTAPI_BASE_URL}/api/v1/medical_record/generate"
-    payload = {"patient_name": patient_name}
+    payload = {
+        "patient_name": patient_name, 
+        "chat_context": chat_context
+    }
     headers = {"Content-Type": "application/json"}
     try:
         print(f"--- 正在调用FastAPI：为 {patient_name} 生成病历 ---")
@@ -28,10 +31,11 @@ def generate_structured_medical_record(patient_name: str) -> dict:
             print(f"FastAPI返回错误: {response_data.get('error')}")
             raise ValueError(f"FastAPI 错误: {response_data.get('error')}. 原始输出: {response_data.get('raw_output')}")
         
-        if "patient_name" in response_data and "summary" in response_data and "encounters" in response_data:
+        # 只要包含主要的病历核心字段，我们就认为返回是合法的
+        if "patient_name" in response_data and "chief_complaint" in response_data and "diagnosis" in response_data:
              return response_data
         else:
-             print("错误：FastAPI 为病历返回了意外的JSON结构。")
+             print(f"错误：FastAPI 为病历返回了意外的JSON结构。接收到的键有: {list(response_data.keys())}")
              raise ValueError("FastAPI 为病历返回了意外的JSON结构。")
              
     except requests.exceptions.RequestException as e:
