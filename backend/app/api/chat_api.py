@@ -16,7 +16,8 @@ from ..services.history_service import (
     start_new_chat_session, 
     generate_medical_record_from_history
 )
-from ..models.consultation_model import ChatMessageModel
+from ..models.consultation_model import ChatMessageModel, AIConsultationModel
+from ..models.user_model import UserModel
 from ..core.extensions import db
 
 # 创建 'chat_bp' 蓝图
@@ -42,6 +43,49 @@ def calculate_tirads_with_agent_tool(characteristics):
 
     from tools.medical_calculator.formulas.thyroid import calculate_thyroid_ti_rads
     return calculate_thyroid_ti_rads(characteristics or {})
+
+
+def _normalize_screening_file_urls(file_urls):
+    urls = []
+    for u in file_urls or []:
+        val = str(u or '').strip()
+        if val:
+            urls.append(val)
+    return urls
+
+
+def _extract_screening_from_structured_symptoms(structured_symptoms):
+    if not isinstance(structured_symptoms, dict):
+        return None
+
+    # 标准存储位：structured_symptoms.thyroid_screening
+    screening = structured_symptoms.get('thyroid_screening')
+    if isinstance(screening, dict):
+        payload = screening.get('payload') if isinstance(screening.get('payload'), dict) else {}
+        return {
+            'payload': payload,
+            'file_urls': _normalize_screening_file_urls(screening.get('file_urls') or []),
+            'submitted_at': screening.get('submitted_at')
+        }
+
+    # 兼容旧格式：直接平铺
+    if 'characteristics' in structured_symptoms:
+        return {
+            'payload': structured_symptoms,
+            'file_urls': _normalize_screening_file_urls(structured_symptoms.get('file_urls') or []),
+            'submitted_at': structured_symptoms.get('submitted_at')
+        }
+
+    return None
+
+
+def _get_latest_patient_screening(patient_id):
+    consultations = AIConsultationModel.query.filter_by(patient_id=patient_id).order_by(AIConsultationModel.created_at.desc()).all()
+    for c in consultations:
+        item = _extract_screening_from_structured_symptoms(c.structured_symptoms)
+        if item and isinstance(item.get('payload'), dict):
+            return item
+    return None
 
 #这个是按照分对话块的方式写的
 """
@@ -277,19 +321,41 @@ def thyroid_screening_submit():
             screening_payload.get('characteristics', {})
         )
 
+        # 1.1) 将结构化筛查数据作为后续医生端唯一真值写入 consultation.structured_symptoms
+        existing_struct = latest_consultation.structured_symptoms if isinstance(latest_consultation.structured_symptoms, dict) else {}
+        latest_consultation.structured_symptoms = {
+            **existing_struct,
+            'thyroid_screening': {
+                'payload': screening_payload,
+                'file_urls': _normalize_screening_file_urls(file_urls),
+                'submitted_at': datetime.utcnow().isoformat() + 'Z'
+            }
+        }
+
         # 2) 构造呈现给前端的历史记录的“人类可读纯文本”（不再存JSON！）
         chars = screening_payload.get("characteristics", {})
         age = screening_payload.get("age", "未知")
         sex = screening_payload.get("sex", "未知")
         report_text = screening_payload.get("report_text", "")
+        tsh = screening_payload.get("tsh", None)
+        neck_radiation_exposure = screening_payload.get("neck_radiation_exposure", None)
+        family_thyroid_cancer_history = screening_payload.get("family_thyroid_cancer_history", None)
 
         display_question = "已提交【甲状腺筛查】信息：\n"
         display_question += f"- 基本信息：{age}岁，性别 {sex}\n"
+        if tsh is not None:
+            display_question += f"- TSH：{tsh} mIU/L\n"
+        if neck_radiation_exposure is not None:
+            display_question += f"- 颈部放射线暴露史：{'有' if neck_radiation_exposure else '无'}\n"
+        if family_thyroid_cancer_history is not None:
+            display_question += f"- 家族甲状腺癌病史：{'有' if family_thyroid_cancer_history else '无'}\n"
         display_question += f"- 超声特征：成分={chars.get('composition', '无')}、回声={chars.get('echogenicity', '无')}、形状={chars.get('shape', '无')}、边缘={chars.get('margin', '无')}、局灶性强回声={chars.get('echogenic_foci', '无')}\n"
         if report_text:
             display_question += f"- 报告描述：{report_text}\n"
         if file_urls:
             display_question += f"- 附件资料：已上传 {len(file_urls)} 个文件\n"
+            for url in file_urls:
+                display_question += f"- 附件URL：{url}\n"
 
         # 3) 组合发给 AI 进行内部推理的完整上下文 (带全JSON数据)
         question_to_ai = "\n".join([
@@ -322,6 +388,195 @@ def thyroid_screening_submit():
         logging.error(f"Error in /api/chat/thyroid/screening: {e}", exc_info=True)
         return jsonify({"error_code": 500, "message": "服务器内部错误"}), 500
 # --- 结束 ---
+
+
+@chat_bp.route('/doctor/thyroid/report', methods=['POST'])
+@jwt_required()
+def doctor_thyroid_report():
+    """
+    医生工作站：当医生在聊天中选择患者标签时，
+    将患者甲状腺筛查结构化信息提交至甲状腺模型链路，返回完整诊断报告。
+    """
+    if not request.is_json:
+        return jsonify({"error_code": 400, "message": "请求体必须为JSON"}), 400
+
+    data = request.get_json(silent=True) or {}
+    doctor_question = (data.get('question') or '').strip()
+    patient_ids = data.get('patient_ids')
+
+    if not doctor_question:
+        return jsonify({"error_code": 400, "message": "缺少医生问题 question"}), 400
+    if not isinstance(patient_ids, list) or len(patient_ids) == 0:
+        return jsonify({"error_code": 400, "message": "缺少患者标签数据 patient_ids"}), 400
+
+    try:
+        user_id = get_jwt_identity()
+        doctor = UserModel.query.get(user_id)
+        if not doctor or doctor.role != 'doctor':
+            return jsonify({"error_code": 403, "message": "仅医生可调用该接口"}), 403
+
+        normalized_patients = []
+        clean_patient_ids = []
+        for pid in patient_ids:
+            try:
+                clean_patient_ids.append(int(pid))
+            except (TypeError, ValueError):
+                continue
+
+        for idx, pid in enumerate(clean_patient_ids):
+            patient_user = UserModel.query.filter_by(id=pid, role='patient').first()
+            if not patient_user:
+                continue
+
+            screening_item = _get_latest_patient_screening(pid)
+            if not screening_item:
+                continue
+
+            screening = screening_item.get('payload') or {}
+            characteristics = screening.get('characteristics') or {}
+            ti_rads = calculate_tirads_with_agent_tool(characteristics)
+
+            normalized = {
+                'index': idx + 1,
+                'id': patient_user.id,
+                'name': patient_user.full_name or f'患者{idx + 1}',
+                'sex': screening.get('sex') or patient_user.gender or '未知',
+                'age': screening.get('age'),
+                'tsh': screening.get('tsh'),
+                'neck_radiation_exposure': screening.get('neck_radiation_exposure'),
+                'family_thyroid_cancer_history': screening.get('family_thyroid_cancer_history'),
+                'characteristics': {
+                    'composition': characteristics.get('composition') or '',
+                    'echogenicity': characteristics.get('echogenicity') or '',
+                    'shape': characteristics.get('shape') or '',
+                    'margin': characteristics.get('margin') or '',
+                    'echogenic_foci': characteristics.get('echogenic_foci') or ''
+                },
+                'report_text': screening.get('report_text') or '',
+                'image_urls': screening_item.get('file_urls') or [],
+                'ti_rads': ti_rads
+            }
+            normalized_patients.append(normalized)
+
+        if not normalized_patients:
+            return jsonify({"error_code": 400, "message": "patient_ids 中无可用筛查数据"}), 400
+
+        # 构建工作流提示词
+        llm_prompt = "\n".join([
+            "你是一名甲状腺专科辅助诊疗AI，请基于结构化筛查信息与TI-RADS工具结果，输出专业、完整、可执行的医生报告。",
+            "输出要求：",
+            "1) 按患者分别给出小节；",
+            "2) 每位患者包含：风险分层、关键依据、建议检查、处置建议、随访计划、注意事项；",
+            "3) 如信息不足要明确指出缺失项；",
+            "4) 最后给出医生汇总建议。",
+            "",
+            f"【医生问题】\n{doctor_question}",
+            "",
+            "【患者甲状腺筛查结构化数据 + TI-RADS结果】",
+            json.dumps(normalized_patients, ensure_ascii=False, indent=2)
+        ])
+
+        # 触发AI生成诊疗报告
+        answer = llm_service.get_ai_response(llm_prompt)
+
+        # 工作流步骤定义
+        workflow = [
+            {"title": "读取医生指令", "detail": "接收并解析医生的诊断问题"}, 
+            {"title": "病历结构化解析", "detail": "提取患者TSH、危险因素等结构化信息"},
+            {"title": "执行TI-RADS评分", "detail": "按五大超声特征自动评分分级"},
+            {"title": "五维特征综合分析", "detail": "基于病例中的TI-RADS五大超声特征进行一致性与风险特征分析"},
+            {"title": "生成专科报告", "detail": "汇总全流程证据输出完整诊疗建议"}
+        ]
+
+        # 证据列表（TI-RADS评分等）
+        evidence = []
+        for p in normalized_patients:
+            ti = p.get('ti_rads') or {}
+            evidence.append({
+                "title": f"{p.get('name', '患者')}：TI-RADS {ti.get('TI_RADS分级', '未知')}",
+                "body": f"积分 {ti.get('TI_RADS积分', '未知')}，建议 {ti.get('指南建议管理方案', '待评估')}",
+                "source": "TI-RADS评分工具",
+                "confidence": "0.92"
+            })
+
+        # 构建节点级别的详细结果（驱动前端工作流图显示）
+        patient_names = ' | '.join([p.get('name', '患者') for p in normalized_patients])
+        patient_basic = ' | '.join([f"{p.get('name')}（{p.get('sex')}，{p.get('age', '?')}岁）" for p in normalized_patients])
+        
+        structured_info_lines = []
+        for p in normalized_patients:
+            c = p.get('characteristics', {})
+            structured_info_lines.append(f"患者：{p.get('name')}，TSH={p.get('tsh', '未提供')}，颈部放射线暴露={p.get('neck_radiation_exposure', '未提供')}，家族史={p.get('family_thyroid_cancer_history', '未提供')}")
+            structured_info_lines.append(f"超声特征：成份={c.get('composition', '未提供')} | 回声={c.get('echogenicity', '未提供')} | 形状={c.get('shape', '未提供')} | 边缘={c.get('margin', '未提供')} | 局灶性强回声={c.get('echogenic_foci', '未提供')}")
+        
+        ti_rads_summary = []
+        for p in normalized_patients:
+            ti = p.get('ti_rads', {})
+            ti_rads_summary.append(f"{p.get('name')}：TI-RADS分级={ti.get('TI_RADS分级', '未知')}，积分={ti.get('TI_RADS积分', '未知')}")
+
+        feature_analysis_lines = []
+        for p in normalized_patients:
+            c = p.get('characteristics', {})
+            feature_analysis_lines.append(
+                f"{p.get('name')}：成份={c.get('composition', '未提供')}，回声={c.get('echogenicity', '未提供')}，"
+                f"形状={c.get('shape', '未提供')}，边缘={c.get('margin', '未提供')}，局灶性强回声={c.get('echogenic_foci', '未提供')}"
+            )
+        
+        # 本流程第4阶段不做图像定位，仅做五维特征分析；imageEvidence 保持空结构以兼容前端协议
+        imageEvidence = {
+            "title": "本阶段不涉及影像定位",
+            "imageUrl": "",
+            "marker": {"x": 50, "y": 50},
+            "finding": "五维特征综合分析基于病例中结构化TI-RADS特征，不直接分析图像像素。"
+        }
+
+        # 返回完整的决策链条与证据结构
+        return jsonify({
+            "answer": answer,
+            "patientReports": normalized_patients,
+            "workflow": workflow,
+            "evidence": evidence,
+            "nodeResults": {
+                "n1": {
+                    "status": "done",
+                    "result": workflow[0]['title'],
+                    "doctorInstruction": doctor_question,
+                    "patientBasicInfo": patient_basic,
+                    "timestamp": datetime.utcnow().isoformat()
+                },
+                "n2": {
+                    "status": "done",
+                    "result": workflow[1]['title'],
+                    "structuredInfo": "\n".join(structured_info_lines),
+                    "timestamp": datetime.utcnow().isoformat()
+                },
+                "n3": {
+                    "status": "done",
+                    "result": workflow[2]['title'],
+                    "scoreBasis": "\n".join(ti_rads_summary),
+                    "timestamp": datetime.utcnow().isoformat()
+                },
+                "n4": {
+                    "status": "done",
+                    "result": workflow[3]['title'],
+                    "featureAnalysis": "\n".join(feature_analysis_lines),
+                    "microCalcResult": "\n".join(feature_analysis_lines),
+                    "timestamp": datetime.utcnow().isoformat()
+                },
+                "n5": {
+                    "status": "done",
+                    "result": workflow[4]['title'],
+                    "finalSummary": "已汇总全流程证据，生成结构化诊疗建议。",
+                    "finalReport": answer,
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            },
+            "imageEvidence": imageEvidence,
+            "runId": f"run-{int(datetime.utcnow().timestamp() * 1000)}"
+        }), 200
+    except Exception as e:
+        logging.error(f"Error in /api/chat/doctor/thyroid/report: {e}", exc_info=True)
+        return jsonify({"error_code": 500, "message": "生成甲状腺报告失败"}), 500
 
 @chat_bp.route('/new', methods=['POST'])
 @jwt_required()

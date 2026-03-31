@@ -1,0 +1,952 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>医智通 · 医生工作站（甲状腺）</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet" />
+    <script src="js/services/apiService.js"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              medblue: {
+                50: "#eef4ff",
+                100: "#dbe7ff",
+                200: "#b8cfff",
+                300: "#85adff",
+                400: "#4d82ff",
+                500: "#165DFF",
+                600: "#0f4bd7",
+                700: "#0b3bab",
+                800: "#082f87",
+              },
+              basebg: "#F5F7FA",
+            },
+            fontFamily: { sans: ["Microsoft YaHei", "Source Han Sans CN", "sans-serif"] },
+            boxShadow: { soft: "0 6px 18px rgba(15, 23, 42, 0.06)" },
+          },
+        },
+      };
+    </script>
+    <style type="text/tailwindcss">
+      @layer utilities {
+        .card { @apply bg-white rounded-xl shadow-soft border border-neutral-200; }
+        .btn { @apply inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition; }
+        .btn-primary { @apply btn bg-medblue-500 text-white hover:bg-medblue-600; }
+        .btn-ghost { @apply btn bg-white text-neutral-700 hover:bg-neutral-50 border border-neutral-200; }
+        .chip { @apply inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs border border-neutral-200 bg-neutral-50 text-neutral-600; }
+        .input { @apply w-full px-3 py-2 rounded-lg bg-white border border-neutral-200 text-neutral-800 placeholder:text-neutral-400 focus:outline-none focus:ring-2 focus:ring-medblue-500/20 focus:border-medblue-500; }
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        .chain-node { @apply absolute rounded-xl border bg-white px-2 py-1.5 shadow-sm min-w-[128px]; }
+        .chain-node-agent { @apply border-medblue-300 bg-medblue-50/60; }
+        .chain-node-tool { @apply border-emerald-300 bg-emerald-50/70; }
+        .chain-node-output { @apply border-amber-300 bg-amber-50/70; }
+        .chain-node-label { @apply text-[11px] text-neutral-500 mt-1; }
+        .chain-dot { @apply inline-block w-2 h-2 rounded-full mr-1.5; }
+        .chain-node-active { @apply ring-2 ring-medblue-400 border-medblue-500 bg-medblue-50; }
+        .chain-viewport { scrollbar-width: thin; scrollbar-color: #d1d5db #f3f4f6; }
+        .chain-viewport::-webkit-scrollbar { height: 10px; }
+        .chain-viewport::-webkit-scrollbar-track { background: #f3f4f6; border-radius: 9999px; }
+        .chain-viewport::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 9999px; }
+        .chain-viewport-expanded {
+          border-color: #cbd5e1;
+          box-shadow: 0 10px 22px rgba(15, 23, 42, 0.12);
+        }
+        .chain-viewport-expanded #decision-chain-canvas { height: 140px; }
+        .chain-node-state-idle { border-color: #4b5563; background-color: #f3f4f6; color: #6b7280; }
+        .chain-node-state-running { border-color: #ef4444; background-color: #fef2f2; color: #dc2626; }
+        .chain-node-state-done { border-color: #22c55e; background-color: #f0fdf4; color: #15803d; }
+        .node-enter { animation: nodeEnter .35s ease both; }
+        @keyframes nodeEnter {
+          from { opacity: 0; transform: translateY(8px) scale(0.98); }
+          to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+      }
+    </style>
+  </head>
+  <body class="h-screen overflow-hidden bg-basebg text-neutral-800 flex flex-col">
+    <!-- 顶部导航 -->
+    <header class="sticky top-0 z-40 bg-white/90 backdrop-blur border-b border-neutral-200">
+      <div class="w-full px-4 py-3 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <a class="btn-ghost" href="doctor_index.html"><i class="fa fa-arrow-left"></i> 返回主页</a>
+          <div class="hidden sm:flex items-center gap-2">
+            <div>
+              <div class="font-bold">医生工作站</div>
+              <div class="text-xs text-neutral-500">甲状腺结节智能诊疗</div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="flex items-center gap-2">
+          <button id="toggle-evidence" class="btn-ghost xl:hidden"><i class="fa fa-sitemap"></i> 溯源面板</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="flex-1 min-h-0 w-full px-4 py-4 overflow-y-auto xl:overflow-hidden">
+      <div class="min-h-full xl:h-full xl:min-h-0 grid grid-cols-1 xl:grid-cols-[300px_minmax(520px,1fr)_350px] gap-4 items-stretch">
+        <!-- 左侧：患者信息模块 -->
+        <aside class="space-y-4 min-h-0 overflow-y-auto scrollbar-hide flex flex-col">
+          <div class="card p-3 min-h-0 flex flex-col">
+            <button id="patient-list-toggle" class="w-full flex items-center justify-between">
+              <div class="font-semibold flex items-center gap-2"><i class="fa fa-users text-medblue-600"></i> 患者列表</div>
+              <i id="patient-list-chevron" class="fa fa-chevron-down text-neutral-500"></i>
+            </button>
+            <div id="patient-list-body" class="mt-3 space-y-3 min-h-0 flex flex-col">
+              <div class="relative">
+                <!-- 图标垂直居中 + 不拦截点击 -->
+                <i class="fa fa-search absolute right-3 top-1/2 -translate-y-1/2 text-neutral-400 pointer-events-none"></i>
+                <!-- 增加左内边距 + 聚焦时隐藏占位文字 -->
+                <input 
+                  id="patient-search" 
+                  class="input pl-10 focus:placeholder:opacity-0" 
+                  placeholder="输入患者姓名搜索"
+                />
+              </div>
+              <div id="patient-cards" class="flex-1 min-h-0 space-y-2 overflow-y-auto scrollbar-hide pr-1"></div>
+            </div>
+          </div>
+
+          <div class="card p-3">
+            <div class="flex items-center justify-between">
+              <div class="font-semibold flex items-center gap-2"><i class="fa fa-id-card-o text-medblue-600"></i> 患者信息</div>
+              <span id="patient-badge" class="chip">未选择</span>
+            </div>
+            <div class="mt-3 space-y-2">
+              <div class="text-sm">
+                <div class="text-xs text-neutral-500">甲状腺筛查详情</div>
+                <div id="patient-screening-details" class="mt-1 rounded-lg border border-neutral-200 bg-neutral-50 p-2 text-xs text-neutral-700 space-y-1">
+                  <div>请选择患者后查看</div>
+                </div>
+              </div>
+
+              <div class="flex gap-2 pt-1">
+                <button id="view-report" class="btn-primary flex-1" disabled>
+                  <i class="fa fa-file-text-o"></i>查看报告
+                </button>
+                <button id="add-to-chat" class="btn-ghost flex-1" disabled>
+                  <i class="fa fa-plus"></i>添加至聊天
+                </button>
+              </div>
+              <div class="text-xs text-neutral-500 mt-2">提示：添加后会在聊天输入区上方生成“患者标签”。</div>
+            </div>
+          </div>
+        </aside>
+
+        <!-- 中间：AI聊天区 -->
+        <section class="card flex flex-col h-full min-h-0 min-w-0 overflow-hidden">
+          <div class="p-4 border-b border-neutral-200 flex items-center justify-between">
+            <div class="font-semibold flex items-center gap-2"><i class="fa fa-comments-o text-medblue-600"></i>AI诊疗助手</div>
+          </div>
+
+          <div id="chat-messages" class="flex-1 p-4 overflow-y-auto scrollbar-hide space-y-3 bg-white">
+            <div class="text-sm text-neutral-500">请选择患者并输入诊疗要求，我将为您解答，右侧同步展示证据溯源。</div>
+          </div>
+
+          <div class="p-3 border-t border-neutral-200 bg-white space-y-2">
+            <div id="tag-bar" class="flex flex-wrap gap-2"></div>
+            <div class="flex items-end gap-3">
+              <textarea id="chat-input" rows="1" class="input min-h-[44px] resize-none" placeholder="请输入诊疗要求..."></textarea>
+              <button id="send-chat" class="btn-primary w-11 h-11 px-0"><i class="fa fa-paper-plane"></i></button>
+            </div>
+            <div class="text-xs text-neutral-400">以上内容由AI生成，仅供参考；如有不适请及时就医。</div>
+          </div>
+        </section>
+
+        <!-- 右侧：证据溯源区 -->
+        <aside id="evidence-panel" class="xl:flex hidden flex-col h-full min-h-0 min-w-0 gap-4">
+          <div class="card p-3">
+            <div class="flex items-center justify-between">
+              <div class="font-semibold flex items-center gap-2"><i class="fa fa-sitemap text-medblue-600"></i> 证据溯源区</div>
+              <div class="flex items-center gap-2">
+                <span class="chip" id="evidence-run-id">run -</span>
+                <button id="decision-chain-expand-btn" class="btn-ghost px-2 py-1"><i class="fa fa-arrows-h"></i> 放大</button>
+              </div>
+            </div>
+            <div class="mt-3 rounded-lg border border-neutral-200 bg-neutral-50 p-3">
+              <div class="text-xs text-neutral-500 mb-2">决策链条</div>
+              <div id="decision-chain-viewport" class="chain-viewport relative border border-neutral-200 rounded-lg bg-white overflow-x-auto h-[160px] flex items-center">
+                <div id="decision-chain-canvas" class="relative min-w-[780px] h-[140px]"></div>
+              </div>
+              <div class="text-[11px] text-neutral-400 mt-2">点击节点查看该步骤的可追溯证据。未点击时证据面板保持隐藏。</div>
+            </div>
+          </div>
+
+          <div id="evidence-content-container" class="card p-3 flex-1 min-h-0 overflow-y-auto scrollbar-hide">
+            <div id="evidence-list-card" class="hidden">
+              <div class="font-semibold flex items-center gap-2"><i class="fa fa-book text-medblue-600"></i> 引用证据列表</div>
+              <div id="evidence-list" class="mt-3 space-y-2 pr-1">
+                <div class="text-sm text-neutral-400">暂无证据</div>
+              </div>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </main>
+
+        <!-- 报告查看弹窗 -->
+        <div id="report-modal" class="hidden fixed inset-0 z-50">
+            <div class="absolute inset-0 bg-black/40" id="report-mask"></div>
+            <div class="absolute inset-0 flex items-center justify-center p-4">
+              <div class="bg-white w-full max-w-3xl rounded-2xl shadow-xl overflow-hidden">
+                <div class="p-4 border-b border-neutral-200 flex items-center justify-between">
+                  <div class="flex items-center gap-2">
+                    <div class="w-9 h-9 rounded-xl bg-medblue-50 flex items-center justify-center">
+                      <i class="fa fa-file-text-o text-medblue-600"></i>
+                    </div>
+                    <div>
+                      <div class="font-semibold">影像报告查看</div>
+                      <div class="text-xs text-neutral-500">支持放大/缩小/翻页</div>
+                    </div>
+                  </div>
+                  <button id="close-report" class="text-neutral-500 hover:text-neutral-700"><i class="fa fa-times text-xl"></i></button>
+                </div>
+                <div class="p-4 grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[70vh] overflow-y-auto">
+                  <div class="rounded-xl border border-neutral-200 bg-neutral-50 p-3">
+                    <div class="flex items-center justify-between mb-2">
+                      <div class="font-medium text-sm">影像（占位）</div>
+                      <div class="flex gap-2">
+                        <button class="btn-ghost px-2 py-1"><i class="fa fa-search-plus"></i></button>
+                        <button class="btn-ghost px-2 py-1"><i class="fa fa-search-minus"></i></button>
+                      </div>
+                    </div>
+                    <div class="rounded-lg border border-neutral-200 bg-white overflow-hidden flex items-center justify-center h-[260px]">
+                      <img id="report-image" src="" alt="影像预览" class="max-h-full max-w-full object-contain transition" />
+                      <div id="report-image-empty" class="text-neutral-400 text-sm hidden">暂无影像</div>
+                    </div>
+                    <div class="mt-2 flex items-center justify-between">
+                      <button id="report-prev" class="btn-ghost px-2 py-1"><i class="fa fa-angle-left"></i>上一页</button>
+                      <div id="report-page" class="text-xs text-neutral-500">0 / 0</div>
+                      <button id="report-next" class="btn-ghost px-2 py-1">下一页<i class="fa fa-angle-right"></i></button>
+                    </div>
+                  </div>
+                  <div class="rounded-xl border border-neutral-200 p-3">
+                    <div class="font-medium text-sm mb-2">报告文字描述</div>
+                    <pre id="report-text" class="whitespace-pre-wrap text-sm text-neutral-700 bg-neutral-50 border border-neutral-200 rounded-lg p-3 min-h-[260px]"></pre>
+                  </div>
+                </div>
+                <div class="p-4 border-t border-neutral-200 flex items-center justify-end gap-3 bg-white">
+                  <button id="download-report" class="btn-ghost"><i class="fa fa-download"></i>下载报告</button>
+                  <button id="ok-report" class="btn-primary">关闭</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+    <script>
+      let patientList = [];
+      let selectedPatient = null;
+      let tags = [];
+      let isSending = false;
+      let reportImages = [];
+      let reportImageIndex = 0;
+      let reportImageScale = 1;
+      let currentEvidencePayload = null;
+      let activeNodeId = null;
+
+      const $ = (id) => document.getElementById(id);
+
+      function escapeHtml(text) {
+        const div = document.createElement("div");
+        div.textContent = text == null ? "" : String(text);
+        return div.innerHTML;
+      }
+
+      function filterPatients(q) {
+        const s = String(q || "").trim();
+        if (!s) return patientList;
+        return patientList.filter((p) => p.name.includes(s));
+      }
+
+      function renderPatientCards(list) {
+        const wrap = $("patient-cards");
+        wrap.innerHTML = "";
+
+        if (!Array.isArray(list) || list.length === 0) {
+          wrap.innerHTML = `<div class="text-sm text-neutral-400 px-2 py-3">暂无患者数据</div>`;
+          return;
+        }
+
+        list.forEach((p) => {
+          const card = document.createElement("button");
+          card.className =
+            "w-full text-left rounded-lg border px-3 py-2 transition " +
+            (selectedPatient?.id === p.id ? "border-medblue-500 bg-medblue-50" : "border-neutral-200 bg-white hover:bg-neutral-50");
+          card.innerHTML = `
+            <div class="font-medium">${p.name} <span class="text-neutral-500 text-xs">| ${p.sex} | ${p.age}岁</span></div>
+          `;
+          card.onclick = () => selectPatient(p);
+          wrap.appendChild(card);
+        });
+      }
+
+      function selectPatient(p) {
+        selectedPatient = p;
+        renderPatientCards(filterPatients($("patient-search").value || ""));
+        $("patient-badge").textContent = p ? "已选择" : "未选择";
+        renderPatientScreeningDetails(p);
+        $("view-report").disabled = !p;
+        $("add-to-chat").disabled = !p;
+      }
+
+      function toDisplayBool(value) {
+        if (value === true) return "有";
+        if (value === false) return "无";
+        return "未提供";
+      }
+
+      function renderPatientScreeningDetails(p) {
+        const box = $("patient-screening-details");
+        if (!box) return;
+
+        if (!p || !p.screening) {
+          box.innerHTML = "<div>请选择患者后查看</div>";
+          return;
+        }
+
+        const s = p.screening || {};
+        const c = s.characteristics || {};
+        const images = Array.isArray(p.imageUrls) ? p.imageUrls : [];
+
+        box.innerHTML = `
+          <div><span class="text-neutral-500">年龄：</span>${s.age ?? p.age ?? "未提供"}</div>
+          <div><span class="text-neutral-500">性别：</span>${escapeHtml(s.sex || p.sex || "未提供")}</div>
+          <div><span class="text-neutral-500">TSH：</span>${s.tsh ?? "未提供"}</div>
+          <div><span class="text-neutral-500">颈部放射线暴露史：</span>${toDisplayBool(s.neck_radiation_exposure)}</div>
+          <div><span class="text-neutral-500">家族甲状腺癌病史：</span>${toDisplayBool(s.family_thyroid_cancer_history)}</div>
+          <div><span class="text-neutral-500">成份：</span>${escapeHtml(c.composition || "未提供")}</div>
+          <div><span class="text-neutral-500">回声：</span>${escapeHtml(c.echogenicity || "未提供")}</div>
+          <div><span class="text-neutral-500">形状：</span>${escapeHtml(c.shape || "未提供")}</div>
+          <div><span class="text-neutral-500">边缘：</span>${escapeHtml(c.margin || "未提供")}</div>
+          <div><span class="text-neutral-500">局灶性强回声：</span>${escapeHtml(c.echogenic_foci || "未提供")}</div>
+          <div><span class="text-neutral-500">报告文本：</span>${escapeHtml(s.report_text || p.reportText || "未提供")}</div>
+          <div><span class="text-neutral-500">影像报告：</span>${images.length ? `共 ${images.length} 份` : "未提供"}</div>
+        `;
+      }
+
+      function renderTags() {
+        const bar = $("tag-bar");
+        bar.innerHTML = "";
+        tags.forEach((t, idx) => {
+          const chip = document.createElement("div");
+          chip.className = "chip cursor-move select-none";
+          chip.draggable = true;
+          chip.dataset.idx = idx;
+          chip.innerHTML = `<span>${t.name}</span><button class="ml-1 text-neutral-500 hover:text-neutral-700"><i class="fa fa-times"></i></button>`;
+          chip.querySelector("button").onclick = () => {
+            tags = tags.filter((x) => x.id !== t.id);
+            renderTags();
+          };
+          chip.ondragstart = (e) => e.dataTransfer.setData("text/plain", String(idx));
+          chip.ondragover = (e) => e.preventDefault();
+          chip.ondrop = (e) => {
+            e.preventDefault();
+            const from = Number(e.dataTransfer.getData("text/plain"));
+            const to = Number(chip.dataset.idx);
+            if (Number.isNaN(from) || Number.isNaN(to) || from === to) return;
+            const next = tags.slice();
+            const [moved] = next.splice(from, 1);
+            next.splice(to, 0, moved);
+            tags = next;
+            renderTags();
+          };
+          bar.appendChild(chip);
+        });
+      }
+
+      function addTagFromSelected() {
+        if (!selectedPatient) return;
+        if (tags.some((t) => t.id === selectedPatient.id)) return;
+        tags.push({ id: selectedPatient.id, name: selectedPatient.name });
+        renderTags();
+      }
+
+      function pushMsg(sender, text) {
+        const wrap = $("chat-messages");
+        const row = document.createElement("div");
+        row.className = "flex " + (sender === "doctor" ? "justify-end" : "justify-start");
+        const bubble = document.createElement("div");
+        bubble.className =
+          "max-w-[80%] rounded-lg px-3 py-2 text-sm border " +
+          (sender === "doctor" ? "bg-medblue-500 text-white border-medblue-500" : "bg-white text-neutral-800 border-neutral-200");
+        bubble.textContent = text;
+        row.appendChild(bubble);
+        wrap.appendChild(row);
+        wrap.scrollTop = wrap.scrollHeight;
+        return row;
+      }
+
+      function buildDoctorQueryWithPatientContext(text) {
+        if (!tags.length) return text;
+
+        const selectedPatients = tags
+          .map((tag) => patientList.find((p) => p.id === tag.id))
+          .filter(Boolean);
+
+        if (!selectedPatients.length) return text;
+
+        const context = selectedPatients
+          .map((p, index) => {
+            const s = p.screening || {};
+            const c = s.characteristics || {};
+            const imageList = (p.imageUrls || []).join("\n") || "无";
+            return [
+              `患者${index + 1}：${p.name}，${p.sex}，${p.age}岁`,
+              `年龄（筛查）：${s.age ?? p.age ?? '未提供'}`,
+              `性别（筛查）：${s.sex || p.sex || '未提供'}`,
+              `TSH：${s.tsh ?? '未提供'}`,
+              `颈部放射线暴露史：${s.neck_radiation_exposure === true ? '有' : s.neck_radiation_exposure === false ? '无' : '未提供'}`,
+              `家族甲状腺癌病史：${s.family_thyroid_cancer_history === true ? '有' : s.family_thyroid_cancer_history === false ? '无' : '未提供'}`,
+              `超声特征：成份=${c.composition || '未提供'}、回声=${c.echogenicity || '未提供'}、形状=${c.shape || '未提供'}、边缘=${c.margin || '未提供'}、局灶性强回声=${c.echogenic_foci || '未提供'}`,
+              `报告摘要：${s.report_text || p.reportText || '未提供'}`,
+              `影像报告URL：\n${imageList}`,
+            ].join("\n");
+          })
+          .join("\n\n");
+
+        return `【医生工作站患者上下文】\n${context}\n\n【医生问题】\n${text}`;
+      }
+
+      function getTaggedPatientIds() {
+        if (!tags.length) return [];
+        return tags
+          .map((tag) => patientList.find((p) => p.id === tag.id))
+          .filter(Boolean)
+          .map((p) => p.id);
+      }
+
+      async function loadDoctorPatients() {
+        const wrap = $("patient-cards");
+        wrap.innerHTML = `<div class="text-sm text-neutral-400 px-2 py-3">正在加载患者列表...</div>`;
+
+        try {
+          const list = await apiService.getDoctorPatients();
+          patientList = Array.isArray(list) ? list : [];
+          renderPatientCards(filterPatients($("patient-search").value || ""));
+        } catch (error) {
+          patientList = [];
+          wrap.innerHTML = `<div class="text-sm text-red-500 px-2 py-3">患者列表加载失败：${escapeHtml(error.message || error)}</div>`;
+        }
+      }
+
+      function renderReportImage() {
+        const imageEl = $("report-image");
+        const emptyEl = $("report-image-empty");
+        const pageEl = $("report-page");
+
+        if (!reportImages.length) {
+          imageEl.classList.add("hidden");
+          emptyEl.classList.remove("hidden");
+          pageEl.textContent = "0 / 0";
+          return;
+        }
+
+        const safeIndex = Math.min(Math.max(reportImageIndex, 0), reportImages.length - 1);
+        reportImageIndex = safeIndex;
+        imageEl.src = reportImages[safeIndex];
+        imageEl.style.transform = `scale(${reportImageScale})`;
+        imageEl.classList.remove("hidden");
+        emptyEl.classList.add("hidden");
+        pageEl.textContent = `${safeIndex + 1} / ${reportImages.length}`;
+      }
+
+      function resetReportViewer() {
+        reportImages = [];
+        reportImageIndex = 0;
+        reportImageScale = 1;
+        $("report-image").style.transform = "scale(1)";
+      }
+
+      function setEvidenceEmpty() {
+        $("evidence-run-id").textContent = "run -";
+        $("decision-chain-canvas").innerHTML = `<div class="absolute inset-0 flex items-center justify-center text-neutral-400 text-sm">等待生成决策链条...</div>`;
+        $("evidence-list").innerHTML = `<div class="text-sm text-neutral-400">暂无证据</div>`;
+        $("evidence-list-card").classList.add("hidden");
+        activeNodeId = null;
+      }
+
+      function selectDecisionNode(nodeId) {
+        const merged = currentEvidencePayload;
+        if (!merged) return;
+        const node = (merged.decisionChain?.nodes || []).find((n) => n.id === nodeId);
+        if (!node) return;
+
+        activeNodeId = nodeId;
+        document.querySelectorAll("#decision-chain-canvas .chain-node").forEach((el) => {
+          el.classList.remove("chain-node-active");
+        });
+        const activeEl = document.querySelector(`#decision-chain-canvas .chain-node[data-node-id="${nodeId}"]`);
+        if (activeEl) activeEl.classList.add("chain-node-active");
+
+        const showList = (items) => {
+          $("evidence-list-card").classList.remove("hidden");
+          renderEvidenceList(items);
+        };
+        const hideList = () => $("evidence-list-card").classList.add("hidden");
+
+        // 严格使用后端返回的节点字段，不再前端拼装
+        if (nodeId === "n1") {
+          showList([
+            { 
+              title: "医生指令", 
+              body: node.doctorInstruction || "未提供", 
+              quote: node.doctorInstruction || "未提供", 
+              source: "聊天输入"
+            },
+            { 
+              title: "患者基础信息", 
+              body: node.patientBasicInfo || "未提供", 
+              quote: node.patientBasicInfo || "未提供", 
+              source: "患者标签"
+            }
+          ]);
+          return;
+        }
+
+        if (nodeId === "n2") {
+          showList([
+            { 
+              title: "结构化病历提取明细", 
+              body: node.structuredInfo || "未提供", 
+              quote: node.structuredInfo || "未提供", 
+              source: "病历结构化解析"
+            }
+          ]);
+          return;
+        }
+
+        if (nodeId === "n3") {
+          // n3 优先显示后端证据列表，其次显示节点的 scoreBasis
+          const tiRadsEvidence = Array.isArray(merged.evidence) && merged.evidence.length > 0
+            ? merged.evidence
+            : [{ 
+                title: "TI-RADS 风险评分", 
+                body: node.scoreBasis || "未提供", 
+                quote: node.scoreBasis || "未提供", 
+                source: "中国TI-RADS评分标准"
+              }];
+          showList(tiRadsEvidence);
+          return;
+        }
+
+        if (nodeId === "n4") {
+          const featureAnalysis = node.featureAnalysis || node.microCalcResult || "未提供五维特征分析";
+          showList([
+            {
+              title: "TI-RADS五维特征综合分析",
+              body: `${featureAnalysis}`,
+              quote: `${featureAnalysis.substring(0, 120)}`,
+              source: "特征分析模块"
+            }
+          ]);
+          return;
+        }
+
+        if (nodeId === "n5") {
+          showList([
+            { 
+              title: "全流程证据汇总", 
+              body: node.finalSummary || "未提供", 
+              quote: node.finalSummary || "未提供", 
+              source: "流程汇总"
+            },
+            { 
+              title: "最终诊疗报告", 
+              body: node.finalReport || merged.answer || "未提供", 
+              quote: (node.finalReport || merged.answer || "未提供").substring(0, 200), 
+              source: "报告生成模块"
+            }
+          ]);
+          return;
+        }
+
+        hideList();
+      }
+
+      function renderDecisionChain(chain) {
+        const canvas = $("decision-chain-canvas");
+        if (!canvas) return;
+        const fixedNodes = [
+          { id: "n1", type: "agent", title: "用户代理", subtitle: "接收医生指令", x: 24, y: 26 },
+          { id: "n2", type: "agent", title: "首席医疗官", subtitle: "病历结构化解析", x: 178, y: 26 },
+          { id: "n3", type: "tool", title: "TI-RADS评分器", subtitle: "风险分级计算", x: 332, y: 26 },
+          { id: "n4", type: "tool", title: "特征分析专家", subtitle: "TI-RADS五维特征综合分析", x: 486, y: 26 },
+          { id: "n5", type: "output", title: "报告生成专家", subtitle: "汇总证据生成诊疗报告", x: 640, y: 26 },
+        ];
+        const statusMap = Object.fromEntries((chain?.nodes || []).map((n) => [n.id, n]));
+        const nodes = fixedNodes.map((n) => ({ ...n, ...(statusMap[n.id] || {}) }));
+        const edges = [
+          { from: "n1", to: "n2" },
+          { from: "n2", to: "n3" },
+          { from: "n3", to: "n4" },
+          { from: "n4", to: "n5" },
+        ];
+
+        if (!nodes.length) {
+          canvas.innerHTML = `<div class="absolute inset-0 flex items-center justify-center text-neutral-400 text-sm">暂无链路节点</div>`;
+          return;
+        }
+
+        canvas.innerHTML = `<svg class="absolute inset-0 w-full h-full pointer-events-none z-20" id="decision-chain-svg"></svg>`;
+        const svg = $("decision-chain-svg");
+        const nodeMap = {};
+        svg.innerHTML = ``;
+
+        const fallbackDoneResult = {
+          n1: "医生指令已接收",
+          n2: "结构化病历已完成",
+          n3: "TI-RADS风险分级已完成",
+          n4: "五维特征分析已完成",
+          n5: "诊疗报告已生成",
+        };
+
+        nodes.forEach((n, idx) => {
+          const el = document.createElement("div");
+          const typeClass = n.type === "agent" ? "chain-node-agent" : n.type === "output" ? "chain-node-output" : "chain-node-tool";
+          const status = n.status || "idle";
+          const statusClass = status === "running" ? "chain-node-state-running" : status === "done" ? "chain-node-state-done" : "chain-node-state-idle";
+          const statusText = status === "running" ? "执行中..." : status === "done" ? (n.result || fallbackDoneResult[n.id] || "已完成") : "未开始";
+          el.className = `chain-node ${typeClass} ${statusClass} node-enter`;
+          el.dataset.nodeId = n.id;
+          el.style.left = `${n.x || 0}px`;
+          el.style.top = `${n.y || 0}px`;
+          el.style.animationDelay = `${Math.min(idx * 70, 350)}ms`;
+          el.style.cursor = "pointer";
+          el.style.zIndex = "10";
+          el.innerHTML = `
+            <div class="text-[12px] font-semibold leading-4">
+              <span class="chain-dot ${status === "done" ? "bg-success" : status === "running" ? "bg-danger" : "bg-neutral-500"}"></span>${n.title || "节点"}
+            </div>
+            <div class="chain-node-label">${n.subtitle || ""}</div>
+            <div class="text-[11px] mt-1 leading-4 truncate">${statusText}</div>
+          `;
+          el.onclick = () => selectDecisionNode(n.id);
+          canvas.appendChild(el);
+          nodeMap[n.id] = { x: n.x || 0, y: n.y || 0 };
+        });
+
+        const nodeW = 128;
+        const nodeH = 72;
+        const contentWidth = Math.max(760, Math.max(...nodes.map((n) => (n.x || 0) + nodeW + 28)));
+        canvas.style.width = `${contentWidth}px`;
+        canvas.style.minWidth = `${contentWidth}px`;
+        edges.forEach((e) => {
+          const from = nodeMap[e.from];
+          const to = nodeMap[e.to];
+          if (!from || !to) return;
+
+          const startX = from.x + nodeW + 4;
+          const startY = from.y + nodeH / 2;
+          const endX = to.x - 8;
+          const endY = to.y + nodeH / 2;
+          const bendX = Math.round((startX + endX) / 2);
+          const pathD = `M ${startX} ${startY} L ${bendX} ${startY} L ${bendX} ${endY} L ${endX} ${endY}`;
+
+          const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+          path.setAttribute("d", pathD);
+          path.setAttribute("fill", "none");
+          path.setAttribute("stroke", "#94a3b8");
+          path.setAttribute("stroke-width", "2");
+          path.setAttribute("stroke-linecap", "round");
+          path.setAttribute("stroke-linejoin", "round");
+          svg.appendChild(path);
+
+          const prevX = bendX;
+          const prevY = endY;
+          const angle = Math.atan2(endY - prevY, endX - prevX);
+          const headLen = 7;
+          const headAngle = Math.PI / 7;
+
+          const x1 = endX - headLen * Math.cos(angle - headAngle);
+          const y1 = endY - headLen * Math.sin(angle - headAngle);
+          const x2 = endX - headLen * Math.cos(angle + headAngle);
+          const y2 = endY - headLen * Math.sin(angle + headAngle);
+
+          const headA = document.createElementNS("http://www.w3.org/2000/svg", "line");
+          headA.setAttribute("x1", String(x1));
+          headA.setAttribute("y1", String(y1));
+          headA.setAttribute("x2", String(endX));
+          headA.setAttribute("y2", String(endY));
+          headA.setAttribute("stroke", "#64748b");
+          headA.setAttribute("stroke-width", "2");
+          headA.setAttribute("stroke-linecap", "round");
+          svg.appendChild(headA);
+
+          const headB = document.createElementNS("http://www.w3.org/2000/svg", "line");
+          headB.setAttribute("x1", String(x2));
+          headB.setAttribute("y1", String(y2));
+          headB.setAttribute("x2", String(endX));
+          headB.setAttribute("y2", String(endY));
+          headB.setAttribute("stroke", "#64748b");
+          headB.setAttribute("stroke-width", "2");
+          headB.setAttribute("stroke-linecap", "round");
+          svg.appendChild(headB);
+        });
+      }
+
+      function renderEvidenceList(items) {
+        const list = $("evidence-list");
+        if (!list) return;
+        if (!Array.isArray(items) || items.length === 0) {
+          list.innerHTML = `<div class="text-sm text-neutral-400">暂无证据</div>`;
+          return;
+        }
+
+        list.innerHTML = items.map((ev, idx) => `
+          <div class="rounded-lg border border-neutral-200 bg-white p-3 node-enter" style="animation-delay:${Math.min(idx * 60, 280)}ms">
+            <div class="font-medium text-sm text-neutral-800">${escapeHtml(ev.title || "证据")}</div>
+            <div class="text-xs text-neutral-600 mt-1">${escapeHtml(ev.body || "")}</div>
+            <div class="mt-2 text-[11px] bg-neutral-50 border border-neutral-200 rounded p-2 text-neutral-700">“${escapeHtml(ev.quote || "暂无原文")}"</div>
+            <div class="mt-2 flex items-center text-[11px] text-neutral-500">
+              <span>来源：${escapeHtml(ev.source || "未标注")}</span>
+            </div>
+          </div>
+        `).join("");
+      }
+
+      function renderEvidence(payload) {
+        const merged = {
+          runId: payload?.runId || `run-${Date.now().toString().slice(-6)}`,
+          decisionChain: payload?.decisionChain || { nodes: [], edges: [] },
+          evidence: Array.isArray(payload?.evidence) ? payload.evidence : [],
+        };
+        currentEvidencePayload = merged;
+        $("evidence-run-id").textContent = merged.runId;
+
+        renderDecisionChain(merged.decisionChain);
+        $("evidence-list-card").classList.add("hidden");
+      }
+
+      // ===== 事件绑定 =====
+      loadDoctorPatients();
+      setEvidenceEmpty();
+
+      $("patient-search").addEventListener("input", (e) => renderPatientCards(filterPatients(e.target.value)));
+
+      $("patient-list-toggle").addEventListener("click", () => {
+        const body = $("patient-list-body");
+        body.classList.toggle("hidden");
+        $("patient-list-chevron").classList.toggle("fa-chevron-down");
+        $("patient-list-chevron").classList.toggle("fa-chevron-up");
+      });
+
+      $("add-to-chat").addEventListener("click", addTagFromSelected);
+
+      $("view-report").addEventListener("click", async () => {
+        if (!selectedPatient) return;
+        $("report-text").textContent = "正在加载报告...";
+        resetReportViewer();
+        renderReportImage();
+
+        $("report-modal").classList.remove("hidden");
+        document.body.classList.add("overflow-hidden"); // 弹窗时锁住本层滚动
+
+        try {
+          const report = await apiService.getDoctorPatientReport(selectedPatient.id);
+          selectedPatient = { ...selectedPatient, ...report };
+
+          const s = selectedPatient.screening || {};
+          const c = s.characteristics || {};
+          const detailLines = [
+            `年龄：${s.age ?? selectedPatient.age ?? '未提供'}`,
+            `性别：${s.sex || selectedPatient.sex || '未提供'}`,
+            `TSH：${s.tsh ?? '未提供'}`,
+            `颈部放射线暴露史：${s.neck_radiation_exposure === true ? '有' : s.neck_radiation_exposure === false ? '无' : '未提供'}`,
+            `家族甲状腺癌病史：${s.family_thyroid_cancer_history === true ? '有' : s.family_thyroid_cancer_history === false ? '无' : '未提供'}`,
+            `成份：${c.composition || '未提供'}`,
+            `回声：${c.echogenicity || '未提供'}`,
+            `形状：${c.shape || '未提供'}`,
+            `边缘：${c.margin || '未提供'}`,
+            `局灶性强回声：${c.echogenic_foci || '未提供'}`,
+            `报告文本：${s.report_text || selectedPatient.reportText || '未提供'}`,
+          ];
+
+          $("report-text").textContent = detailLines.join("\n");
+          reportImages = Array.isArray(selectedPatient.imageUrls) ? selectedPatient.imageUrls : [];
+          reportImageIndex = 0;
+          reportImageScale = 1;
+          renderReportImage();
+          renderPatientScreeningDetails(selectedPatient);
+        } catch (error) {
+          $("report-text").textContent = `加载报告失败：${error.message || error}`;
+          resetReportViewer();
+          renderReportImage();
+        }
+      });
+      const closeReport = () => {
+        $("report-modal").classList.add("hidden");
+        document.body.classList.remove("overflow-hidden"); // 取消底层滚动锁定
+      };
+      $("close-report").addEventListener("click", closeReport);
+      $("ok-report").addEventListener("click", closeReport);
+      if($("report-mask")) $("report-mask").addEventListener("click", closeReport);
+      $("download-report").addEventListener("click", () => {
+        if (!selectedPatient) return;
+        const text = selectedPatient.reportText || "暂无报告内容";
+        const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `${selectedPatient.name || "患者"}_影像报告.txt`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+      });
+
+      $("report-prev").addEventListener("click", () => {
+        if (!reportImages.length) return;
+        reportImageIndex = (reportImageIndex - 1 + reportImages.length) % reportImages.length;
+        renderReportImage();
+      });
+
+      $("report-next").addEventListener("click", () => {
+        if (!reportImages.length) return;
+        reportImageIndex = (reportImageIndex + 1) % reportImages.length;
+        renderReportImage();
+      });
+
+      $("report-image").addEventListener("error", () => {
+        $("report-image-empty").classList.remove("hidden");
+      });
+
+      const reportZoomButtons = document.querySelectorAll("#report-modal .fa-search-plus, #report-modal .fa-search-minus");
+      if (reportZoomButtons.length >= 2) {
+        reportZoomButtons[0].parentElement.addEventListener("click", () => {
+          reportImageScale = Math.min(reportImageScale + 0.2, 2.5);
+          renderReportImage();
+        });
+        reportZoomButtons[1].parentElement.addEventListener("click", () => {
+          reportImageScale = Math.max(reportImageScale - 0.2, 0.6);
+          renderReportImage();
+        });
+      }
+
+      async function sendChat() {
+        if (isSending) return;
+
+        const text = $("chat-input").value.trim();
+        if (!text) return;
+
+        pushMsg("doctor", text);
+        $("chat-input").value = "";
+
+        const sendingBtn = $("send-chat");
+        sendingBtn.disabled = true;
+        isSending = true;
+
+        const loadingNode = pushMsg("ai", "AI：正在分析，请稍候...");
+
+        try {
+          const taggedPatientIds = getTaggedPatientIds();
+          let answer = "";
+          let evidencePayload = {};
+
+          if (taggedPatientIds.length > 0) {
+            // 调用后端专科诊疗链路（返回完整的 nodeResults / evidence）
+            const result = await apiService.sendDoctorThyroidReport(text, taggedPatientIds);
+            answer = result?.answer || "未获得甲状腺模型返回内容";
+            // 直接使用后端返回的标准化结果，包含 decisionChain / evidence
+            evidencePayload = {
+              runId: result?.runId,
+              decisionChain: result?.decisionChain,
+              evidence: result?.evidence || [],
+              answer: answer
+            };
+          } else {
+            // 无患者标签时的备选路径（通用医学问答，不需要专科工作流）
+            const finalQuestion = buildDoctorQueryWithPatientContext(text);
+            answer = await apiService.sendMedicalQuery(finalQuestion);
+            evidencePayload = {
+              runId: `run-${Date.now().toString().slice(-6)}`,
+              decisionChain: {
+                nodes: [],
+                edges: [],
+              },
+              evidence: [],
+              answer: answer
+            };
+          }
+
+          if (loadingNode && loadingNode.parentNode) {
+            loadingNode.parentNode.removeChild(loadingNode);
+          }
+
+          pushMsg("ai", answer || "未获得模型返回内容");
+          renderEvidence(evidencePayload);
+        } catch (error) {
+          if (loadingNode && loadingNode.parentNode) {
+            loadingNode.parentNode.removeChild(loadingNode);
+          }
+          pushMsg("ai", `请求失败：${error.message || error}`);
+          setEvidenceEmpty();
+        } finally {
+          sendingBtn.disabled = false;
+          isSending = false;
+        }
+      }
+      $("send-chat").addEventListener("click", sendChat);
+      $("chat-input").addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          sendChat();
+        }
+      });
+
+      $("toggle-evidence").addEventListener("click", () => {
+        const p = $("evidence-panel");
+        p.classList.toggle("hidden");
+      });
+
+      $("decision-chain-expand-btn").addEventListener("click", () => {
+        const viewport = $("decision-chain-viewport");
+        const btn = $("decision-chain-expand-btn");
+
+        const applyLeftExpandLayout = () => {
+          const canvas = $("decision-chain-canvas");
+          const graphWidth = (canvas?.scrollWidth || 0) + 8;
+          const parentWidth = viewport.parentElement ? viewport.parentElement.clientWidth : graphWidth;
+          const targetWidth = Math.min(Math.max(520, window.innerWidth - 80), Math.max(parentWidth, graphWidth));
+          const offsetX = Math.min(0, parentWidth - targetWidth);
+          viewport.style.width = `${targetWidth}px`;
+          viewport.style.maxWidth = `${targetWidth}px`;
+          viewport.style.transform = `translateX(${offsetX}px)`;
+        };
+
+        const resetExpandLayout = () => {
+          viewport.style.width = "";
+          viewport.style.maxWidth = "";
+          viewport.style.transform = "";
+        };
+
+        viewport.classList.toggle("chain-viewport-expanded");
+        if (viewport.classList.contains("chain-viewport-expanded")) {
+          applyLeftExpandLayout();
+          btn.innerHTML = '<i class="fa fa-compress"></i> 收起';
+          viewport.scrollLeft = 0;
+        } else {
+          resetExpandLayout();
+          btn.innerHTML = '<i class="fa fa-arrows-h"></i> 放大';
+        }
+      });
+
+      window.addEventListener("resize", () => {
+        const viewport = $("decision-chain-viewport");
+        const canvas = $("decision-chain-canvas");
+        if (!viewport || !viewport.classList.contains("chain-viewport-expanded")) return;
+        const graphWidth = (canvas?.scrollWidth || 0) + 8;
+        const parentWidth = viewport.parentElement ? viewport.parentElement.clientWidth : graphWidth;
+        const targetWidth = Math.min(Math.max(520, window.innerWidth - 80), Math.max(parentWidth, graphWidth));
+        const offsetX = Math.min(0, parentWidth - targetWidth);
+        viewport.style.width = `${targetWidth}px`;
+        viewport.style.maxWidth = `${targetWidth}px`;
+        viewport.style.transform = `translateX(${offsetX}px)`;
+      });
+    </script>
+  </body>
+</html>
+

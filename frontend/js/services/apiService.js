@@ -1,5 +1,226 @@
 // 后端API基础地址（根据实际部署环境修改）
 const API_BASE_URL = 'http://localhost:5000/api';
+const API_HOST_URL = API_BASE_URL.replace(/\/api$/, '');
+
+// 医生端测试数据：当后端未提供专用接口时使用
+const DOCTOR_PATIENTS_FALLBACK = [
+  {
+    id: 101,
+    name: '张三',
+    sex: '男',
+    age: 45,
+    reportText: '超声提示：右叶结节1.2cm，低回声，边界欠清，点状强回声，建议结合临床复查。',
+    screening: {
+      age: 45,
+      sex: '男',
+      tsh: 1.8,
+      neck_radiation_exposure: false,
+      family_thyroid_cancer_history: false,
+      characteristics: {
+        composition: '实性',
+        echogenicity: '低回声',
+        shape: '高大于宽',
+        margin: '不规则',
+        echogenic_foci: '点状强回声'
+      },
+      report_text: '右叶结节1.2cm，低回声，边界欠清，点状强回声。'
+    },
+    imageUrls: [
+      'https://images.unsplash.com/photo-1582719478250-c89cae4dc85b?auto=format&fit=crop&w=1200&q=80',
+      'https://images.unsplash.com/photo-1579684385127-1ef15d508118?auto=format&fit=crop&w=1200&q=80'
+    ]
+  },
+  {
+    id: 102,
+    name: '李四',
+    sex: '女',
+    age: 38,
+    reportText: '化验：TSH降低，FT4升高；超声提示弥漫性回声改变，未见明确高危结节。',
+    screening: {
+      age: 38,
+      sex: '女',
+      tsh: 0.2,
+      neck_radiation_exposure: false,
+      family_thyroid_cancer_history: false,
+      characteristics: {
+        composition: '混合实性',
+        echogenicity: '等回声',
+        shape: '宽大于高',
+        margin: '光滑',
+        echogenic_foci: '无'
+      },
+      report_text: '甲功异常，建议复查。'
+    },
+    imageUrls: [
+      'https://images.unsplash.com/photo-1519494026892-80bbd2d6fd0d?auto=format&fit=crop&w=1200&q=80'
+    ]
+  }
+];
+
+function normalizeDoctorPatient(raw) {
+  const imageUrls = [];
+  const rawImagePaths = raw.image_paths || raw.imagePaths || raw['影像资料'] || '';
+
+  if (Array.isArray(raw.imageUrls)) {
+    raw.imageUrls.forEach(url => {
+      const val = String(url || '').trim();
+      if (!val) return;
+      if (/^https?:\/\//i.test(val)) {
+        imageUrls.push(val);
+      } else {
+        imageUrls.push(`${API_HOST_URL}${val.startsWith('/') ? '' : '/'}${val}`);
+      }
+    });
+  } else if (Array.isArray(raw.image_urls)) {
+    raw.image_urls.forEach(url => {
+      const val = String(url || '').trim();
+      if (!val) return;
+      if (/^https?:\/\//i.test(val)) {
+        imageUrls.push(val);
+      } else {
+        imageUrls.push(`${API_HOST_URL}${val.startsWith('/') ? '' : '/'}${val}`);
+      }
+    });
+  } else if (typeof rawImagePaths === 'string' && rawImagePaths.trim()) {
+    rawImagePaths.split(',').map(s => s.trim()).filter(Boolean).forEach(path => {
+      if (/^https?:\/\//i.test(path)) {
+        imageUrls.push(path);
+      } else {
+        imageUrls.push(`${API_HOST_URL}${path.startsWith('/') ? '' : '/'}${path}`);
+      }
+    });
+  }
+
+  const screening = raw.screening || {};
+  const characteristics = screening.characteristics || raw.characteristics || {};
+
+  return {
+    id: raw.id,
+    name: raw.name || raw.full_name || raw.patientName || '未命名患者',
+    sex: raw.sex || raw.gender || '未知',
+    age: Number(raw.age) || 0,
+    reportText: raw.reportText || raw.report_text || raw['现病史'] || raw['主诉'] || '',
+    imageUrls,
+    screening: {
+      age: screening.age ?? raw.age ?? null,
+      sex: screening.sex || raw.sex || raw.gender || '',
+      tsh: screening.tsh ?? raw.tsh ?? null,
+      neck_radiation_exposure: screening.neck_radiation_exposure ?? raw.neck_radiation_exposure ?? null,
+      family_thyroid_cancer_history: screening.family_thyroid_cancer_history ?? raw.family_thyroid_cancer_history ?? null,
+      characteristics: {
+        composition: characteristics.composition || '',
+        echogenicity: characteristics.echogenicity || '',
+        shape: characteristics.shape || '',
+        margin: characteristics.margin || '',
+        echogenic_foci: characteristics.echogenic_foci || ''
+      },
+      report_text: screening.report_text || raw.reportText || raw.report_text || ''
+    }
+  };
+}
+
+function mapDoctorWorkflowToDecisionChain(nodeResults) {
+  /**
+   * 后端驱动的决策链条映射：优先使用后端真实返回的 nodeResults，
+   * 不再前端拼装。保证与后端执行逻辑一致。
+   */
+  const safeNodeResults = nodeResults || {};
+  return {
+    nodes: [
+      {
+        id: 'n1',
+        status: safeNodeResults.n1?.status || 'idle',
+        result: safeNodeResults.n1?.result || '',
+        doctorInstruction: safeNodeResults.n1?.doctorInstruction || '',
+        patientBasicInfo: safeNodeResults.n1?.patientBasicInfo || '',
+        timestamp: safeNodeResults.n1?.timestamp
+      },
+      {
+        id: 'n2',
+        status: safeNodeResults.n2?.status || 'idle',
+        result: safeNodeResults.n2?.result || '',
+        structuredInfo: safeNodeResults.n2?.structuredInfo || '',
+        timestamp: safeNodeResults.n2?.timestamp
+      },
+      {
+        id: 'n3',
+        status: safeNodeResults.n3?.status || 'idle',
+        result: safeNodeResults.n3?.result || '',
+        scoreBasis: safeNodeResults.n3?.scoreBasis || '',
+        timestamp: safeNodeResults.n3?.timestamp
+      },
+      {
+        id: 'n4',
+        status: safeNodeResults.n4?.status || 'idle',
+        result: safeNodeResults.n4?.result || '',
+        featureAnalysis: safeNodeResults.n4?.featureAnalysis || '',
+        microCalcResult: safeNodeResults.n4?.microCalcResult || safeNodeResults.n4?.featureAnalysis || '',
+        timestamp: safeNodeResults.n4?.timestamp
+      },
+      {
+        id: 'n5',
+        status: safeNodeResults.n5?.status || 'idle',
+        result: safeNodeResults.n5?.result || '',
+        finalSummary: safeNodeResults.n5?.finalSummary || '',
+        finalReport: safeNodeResults.n5?.finalReport || '',
+        timestamp: safeNodeResults.n5?.timestamp
+      }
+    ],
+    edges: [
+      { from: 'n1', to: 'n2' },
+      { from: 'n2', to: 'n3' },
+      { from: 'n3', to: 'n4' },
+      { from: 'n4', to: 'n5' }
+    ]
+  };
+}
+
+function normalizeDoctorThyroidReportResponse(raw, question) {
+  /**
+   * 后端驱动的响应标准化：不拼装，直接使用后端返回的字段。
+   * 确保前端严格依赖后端数据，避免降级生成虚假结果。
+   */
+  const normalizedPatients = Array.isArray(raw?.patientReports)
+    ? raw.patientReports.map(normalizeDoctorPatient)
+    : [];
+
+  // 直接使用后端返回的证据列表（已包含 source 和 confidence）
+  const evidence = Array.isArray(raw?.evidence)
+    ? raw.evidence.map((ev) => ({
+      title: ev?.title || '证据项',
+      body: ev?.body || '',
+      quote: ev?.quote || ev?.body || '',
+      source: ev?.source || '医学知识库',
+      confidence: ev?.confidence || '-'
+    }))
+    : [];
+
+  // 直接使用后端返回的 imageEvidence（包含标记坐标和定位信息）
+  const imageEvidence = raw?.imageEvidence || {
+    title: '暂无可定位影像',
+    imageUrl: '',
+    marker: { x: 50, y: 50 },
+    finding: '后端未返回影像证据定位信息'
+  };
+
+  // 直接使用后端返回的 nodeResults 构建决策链条
+  const decisionChain = mapDoctorWorkflowToDecisionChain(
+    raw?.nodeResults || {},
+    raw?.workflow || []
+  );
+
+  const answer = raw?.answer || '未获得诊疗报告';
+  
+  return {
+    answer,
+    patientReports: normalizedPatients,
+    workflow: Array.isArray(raw?.workflow) ? raw.workflow : [],
+    evidence,
+    imageEvidence,
+    decisionChain,
+    runId: raw?.runId || `run-${Date.now().toString().slice(-6)}`
+  };
+}
 
 /**
  * 辅助函数：获取认证请求头
@@ -329,6 +550,39 @@ const apiService = {
       return data.answer; // 假设后端返回 { "answer": "AI回答内容" }
     } catch (error) {
       console.error('sendMedicalQuery 调用失败:', error.message);
+      throw error;
+    }
+  },
+
+  /**
+   * 医生工作站：携带患者标签时生成甲状腺完整报告
+   * 后端接口：POST /api/chat/doctor/thyroid/report
+   * @param {string} question 医生输入的问题
+   * @param {Array<number|string>} patientIds 被标签选中的患者ID
+   * @returns {Promise<{answer:string, patientReports:Array, workflow:Array, evidence:Array, imageEvidence:Object, decisionChain:Object, runId:string}>}
+   */
+  sendDoctorThyroidReport: async function(question, patientIds) {
+    try {
+      const response = await fetch(`${API_BASE_URL}/chat/doctor/thyroid/report`, {
+        method: 'POST',
+        headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question, patient_ids: patientIds }),
+        credentials: 'include'
+      });
+
+      if (response.status === 401) {
+        localStorage.removeItem('access_token');
+        throw new Error('登录已过期，请重新登录');
+      }
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.message || `请求失败: ${response.statusText}`);
+      }
+
+      return normalizeDoctorThyroidReportResponse(data, question);
+    } catch (error) {
+      console.error('sendDoctorThyroidReport 调用失败:', error.message);
       throw error;
     }
   },
@@ -938,6 +1192,71 @@ const apiService = {
       return data;
     } catch (error) {
       console.error('changePassword API调用失败:', error.message);
+      throw error;
+    }
+  },
+
+  /**
+   * 医生工作站：获取患者列表
+   * 真实接口优先；若后端未提供则回退到本地模拟数据
+   * @returns {Promise<Array>} 医生端患者列表
+   */
+  getDoctorPatients: async function() {
+    try {
+      const response = await fetch(`${API_BASE_URL}/doctor/patients`, {
+        method: 'GET',
+        headers: getAuthHeaders(),
+        credentials: 'include'
+      });
+
+      if (response.status === 401) {
+        localStorage.removeItem('access_token');
+        throw new Error('登录已过期，请重新登录');
+      }
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || `获取患者列表失败: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      if (!Array.isArray(data)) throw new Error('患者列表数据格式错误');
+
+      return data.map(normalizeDoctorPatient);
+    } catch (error) {
+      console.error('getDoctorPatients 调用失败:', error.message);
+      throw error;
+    }
+  },
+
+  /**
+   * 医生工作站：获取患者报告详情（含影像）
+   * 真实接口优先；若后端未提供则从模拟数据返回
+   * @param {number|string} patientId 患者ID
+   * @returns {Promise<Object>} 报告详情
+   */
+  getDoctorPatientReport: async function(patientId) {
+    try {
+      const response = await fetch(`${API_BASE_URL}/doctor/patients/${patientId}/report`, {
+        method: 'GET',
+        headers: getAuthHeaders(),
+        credentials: 'include'
+      });
+
+      if (response.status === 401) {
+        localStorage.removeItem('access_token');
+        throw new Error('登录已过期，请重新登录');
+      }
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || `获取患者报告失败: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      return normalizeDoctorPatient(data || {});
+    } catch (error) {
+      console.error('getDoctorPatientReport 调用失败:', error.message);
       throw error;
     }
   },

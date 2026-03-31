@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>医智通 - 医生端主页</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js"></script>
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            base: { bg: '#F5F7FA' },
+            medical: { blue: '#165DFF' },
+            patient: {
+              50: '#f0f7ff', 100: '#e0efff', 200: '#b9ddff',
+              300: '#7cc3fc', 400: '#3d9fe8', 500: '#0a84e3',
+              600: '#0066c7', 700: '#0052a3', 800: '#004382'
+            },
+            doctor: {
+              50: '#f0fdfa', 100: '#ccfbf1', 200: '#99f6e4',
+              300: '#5eead4', 400: '#2dd4bf', 500: '#14b8a6',
+              600: '#0d9488', 700: '#0f766e', 800: '#115e59'
+            },
+            success: '#10b981', warning: '#f59e0b', danger: '#ef4444'
+          },
+          fontFamily: { sans: ['Microsoft YaHei', 'Source Han Sans CN', 'sans-serif'] },
+          boxShadow: { soft: '0 6px 18px rgba(15, 23, 42, 0.08)' }
+        }
+      }
+    }
+  </script>
+    
+  <style type="text/tailwindcss">
+    @layer utilities {
+      /* 统一卡片样式 */
+      .card {
+        @apply bg-white rounded-2xl shadow-soft border border-neutral-200;
+      }
+      /* 统一主按钮样式 */
+      .btn-primary {
+        @apply inline-flex items-center justify-center gap-2 px-6 py-3 rounded-lg bg-medical-blue text-white text-sm font-semibold hover:bg-blue-600 transition shadow-sm;
+      }
+      /* 统一标签样式 */
+      .chip {
+        @apply inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium bg-medical-blue/10 text-medical-blue border border-medical-blue/20;
+      }
+    }
+  </style>
+</head>
+<body class="bg-base-bg h-screen overflow-hidden text-neutral-800 flex flex-col">
+  <!-- 顶部导航栏 -->
+  <header class="sticky top-0 z-40 bg-white/90 backdrop-blur border-b border-neutral-200">
+    <div class="w-full px-4 py-3 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-medical-blue/10 flex items-center justify-center">
+          <i class="fa fa-hospital-o text-medical-blue text-xl"></i>
+        </div>
+        <div>
+          <div class="text-base font-bold">医智通</div>
+        </div>
+      </div>
+      <div class="flex items-center gap-3">
+        <div class="hidden md:flex items-center gap-2 text-sm text-neutral-600">
+          <i class="fa fa-user-md text-medical-blue"></i>
+          <span id="doctor-name">医生</span>
+        </div>
+        <button class="px-3 py-2 rounded-lg bg-neutral-100 hover:bg-neutral-200 transition text-sm">
+          <i class="fa fa-bell-o mr-1"></i>消息
+        </button>
+        <button class="px-3 py-2 rounded-lg bg-neutral-100 hover:bg-neutral-200 transition text-sm">
+          <i class="fa fa-cog mr-1"></i>设置
+        </button>
+        <a href="log-in.html" class="px-3 py-2 rounded-lg bg-neutral-100 hover:bg-neutral-200 transition text-sm">
+          <i class="fa fa-sign-out mr-1"></i>退出
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <main class="flex-1">
+    <div class="w-full h-full grid grid-cols-1 lg:grid-cols-4 gap-0 items-stretch">
+      <!-- 数据可视化区域 -->
+      <section class="card p-4 lg:col-span-3 h-full">
+        <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
+          <div>
+            <h2 class="text-lg font-bold">数据视窗</h2>
+            <p class="text-sm text-neutral-500">甲状腺患病/诊治概览（演示数据）</p>
+          </div>
+          <div class="flex items-center gap-2">
+            <div class="text-sm text-neutral-600">时间范围</div>
+            <select id="range-select" class="px-3 py-2 rounded-lg border border-neutral-200 text-sm focus:outline-none focus:ring-2 focus:ring-medical-blue/20 focus:border-medical-blue">
+              <option value="7">近7天</option>
+              <option value="30" selected>近30天</option>
+              <option value="90">近90天</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div class="rounded-xl border border-neutral-200 p-3">
+            <div class="flex items-center justify-between mb-2">
+              <div class="font-medium text-sm">甲状腺患病情况统计</div>
+              <span class="text-xs text-neutral-500">良性 / 恶性 / 疑似</span>
+            </div>
+            <div class="h-[220px]">
+              <canvas id="pieChart"></canvas>
+            </div>
+          </div>
+          <div class="rounded-xl border border-neutral-200 p-3">
+            <div class="flex items-center justify-between mb-2">
+              <div class="font-medium text-sm">甲状腺诊治情况统计</div>
+              <div class="flex items-center gap-2">
+                <span class="text-xs text-neutral-600">科室</span>
+                <select id="dept-select" class="px-2 py-1 rounded-lg border border-neutral-200 text-xs focus:outline-none focus:ring-2 focus:ring-medical-blue/20 focus:border-medical-blue">
+                  <option>内分泌</option>
+                  <option>甲状腺外科</option>
+                  <option selected>超声科</option>
+                </select>
+              </div>
+            </div>
+            <div class="h-[220px]">
+              <canvas id="lineChart"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <div class="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div class="rounded-xl border border-neutral-200 p-3 flex items-center justify-between">
+            <div>
+              <div class="text-xs text-neutral-500">总接诊数</div>
+              <div id="kpi-total" class="text-xl font-bold">—</div>
+            </div>
+            <div class="w-9 h-9 rounded-xl bg-medical-blue/10 flex items-center justify-center">
+              <i class="fa fa-users text-medical-blue"></i>
+            </div>
+          </div>
+          <div class="rounded-xl border border-neutral-200 p-3 flex items-center justify-between">
+            <div>
+              <div class="text-xs text-neutral-500">待复诊数</div>
+              <div id="kpi-follow" class="text-xl font-bold">—</div>
+            </div>
+            <div class="w-9 h-9 rounded-xl bg-warning/10 flex items-center justify-center">
+              <i class="fa fa-clock-o text-warning"></i>
+            </div>
+          </div>
+          <div class="rounded-xl border border-neutral-200 p-3 flex items-center justify-between">
+            <div>
+              <div class="text-xs text-neutral-500">异常报告数</div>
+              <div id="kpi-abn" class="text-xl font-bold">—</div>
+            </div>
+            <div class="w-9 h-9 rounded-xl bg-danger/10 flex items-center justify-center">
+              <i class="fa fa-exclamation-triangle text-danger"></i>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 工作站入口区域 -->
+      <section class="card p-5 lg:col-span-1 h-full flex flex-col justify-center">
+        <div class="text-center space-y-3">
+        <div class="chip">
+            <i class="fa fa-magic"></i> AI辅助诊疗
+        </div>
+        <div class="text-lg font-bold">医生工作站</div>
+        <div class="text-sm text-neutral-500">
+            点击进入AI辅助诊疗工作站，支持患者信息调取 + 智能分析 + 证据溯源。
+        </div>
+        <div class="pt-2">
+            <a href="doctor_thyroid_workstation.html" class="btn-primary">
+            <i class="fa fa-sign-in"></i> 进入工作站
+            </a>
+        </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    const doctorName = (localStorage.getItem('user_info') && JSON.parse(localStorage.getItem('user_info')).full_name) || '医生';
+    document.getElementById('doctor-name').textContent = doctorName;
+
+    const state = {
+      rangeDays: 30,
+      dept: '超声科',
+      kpis: { total: 1264, follow: 83, abn: 41 },
+      disease: { benign: 62, malignant: 18, suspected: 20 },
+      visits: Array.from({ length: 30 }, (_, i) => ({ day: i + 1, value: Math.max(0, Math.round(20 + 8 * Math.sin(i / 3) + (Math.random() * 6 - 3))) }))
+    };
+
+    const pieCtx = document.getElementById('pieChart');
+    const lineCtx = document.getElementById('lineChart');
+
+    const pie = new Chart(pieCtx, {
+      type: 'doughnut',
+      data: {
+        labels: ['良性', '恶性', '疑似'],
+        datasets: [{
+          data: [state.disease.benign, state.disease.malignant, state.disease.suspected],
+          backgroundColor: ['rgba(22,93,255,0.80)', 'rgba(239,68,68,0.75)', 'rgba(245,158,11,0.75)'],
+          borderWidth: 0
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', labels: { boxWidth: 10 } } },
+        cutout: '62%'
+      }
+    });
+
+    const line = new Chart(lineCtx, {
+      type: 'line',
+      data: {
+        labels: state.visits.map(v => `D${v.day}`),
+        datasets: [{
+          label: '诊治量',
+          data: state.visits.map(v => v.value),
+          borderColor: 'rgba(22,93,255,0.95)',
+          backgroundColor: 'rgba(22,93,255,0.12)',
+          tension: 0.35,
+          fill: true,
+          pointRadius: 0
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { grid: { display: false } },
+          y: { grid: { color: 'rgba(0,0,0,0.06)' }, ticks: { precision: 0 } }
+        }
+      }
+    });
+
+    function refreshKpi() {
+      document.getElementById('kpi-total').textContent = state.kpis.total;
+      document.getElementById('kpi-follow').textContent = state.kpis.follow;
+      document.getElementById('kpi-abn').textContent = state.kpis.abn;
+      document.getElementById('updated-at').textContent = new Date().toLocaleString();
+    }
+    refreshKpi();
+
+    document.getElementById('range-select').addEventListener('change', (e) => {
+      state.rangeDays = Number(e.target.value);
+      // 演示：随范围变化动态更新折线长度
+      const len = state.rangeDays;
+      state.visits = Array.from({ length: len }, (_, i) => ({ day: i + 1, value: Math.max(0, Math.round(18 + 9 * Math.sin(i / 4) + (Math.random() * 8 - 4))) }));
+      line.data.labels = state.visits.map(v => `D${v.day}`);
+      line.data.datasets[0].data = state.visits.map(v => v.value);
+      line.update();
+      document.getElementById('updated-at').textContent = new Date().toLocaleString();
+    });
+
+    document.getElementById('dept-select').addEventListener('change', (e) => {
+      state.dept = e.target.value;
+      document.getElementById('updated-at').textContent = new Date().toLocaleString();
+    });
+  </script>
+</body>
+</html>
+

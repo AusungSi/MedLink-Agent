@@ -37,8 +37,9 @@ def create_app(config_name='default'):
     app.register_blueprint(department_bp)
     from .api.appointment_api import appointment_bp
     app.register_blueprint(appointment_bp)
-    from .api.doctor_api import doctor_bp
+    from .api.doctor_api import doctor_bp, doctor_patient_bp
     app.register_blueprint(doctor_bp)
+    app.register_blueprint(doctor_patient_bp)
     from .api.medical_record_api import medical_record_bp
     app.register_blueprint(medical_record_bp)
     from .api.logout_api import logout_bp
