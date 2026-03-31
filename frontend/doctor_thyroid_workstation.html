@@ -40,7 +40,7 @@
         .chip { @apply inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs border border-neutral-200 bg-neutral-50 text-neutral-600; }
         .input { @apply w-full px-3 py-2 rounded-lg bg-white border border-neutral-200 text-neutral-800 placeholder:text-neutral-400 focus:outline-none focus:ring-2 focus:ring-medblue-500/20 focus:border-medblue-500; }
         .scrollbar-hide::-webkit-scrollbar { display: none; }
-        .chain-node { @apply absolute rounded-xl border bg-white px-2 py-1.5 shadow-sm min-w-[128px]; }
+        .chain-node { @apply absolute rounded-xl border bg-white px-2 py-1.5 shadow-sm min-w-[128px]; width: 148px; box-sizing: border-box; }
         .chain-node-agent { @apply border-medblue-300 bg-medblue-50/60; }
         .chain-node-tool { @apply border-emerald-300 bg-emerald-50/70; }
         .chain-node-output { @apply border-amber-300 bg-amber-50/70; }
@@ -247,6 +247,43 @@
       let reportImageScale = 1;
       let currentEvidencePayload = null;
       let activeNodeId = null;
+      let restoreSelectedPatientId = null;
+
+      const WORKSTATION_STATE_KEY_PREFIX = "medlink_doctor_thyroid_state_v1";
+
+      function getWorkstationStateKey() {
+        try {
+          const userRaw = localStorage.getItem("user_info");
+          if (userRaw) {
+            const user = JSON.parse(userRaw);
+            const userId = user?.id ?? user?.user_id ?? user?.uid;
+            if (userId != null && String(userId).trim() !== "") {
+              return `${WORKSTATION_STATE_KEY_PREFIX}_${String(userId)}`;
+            }
+          }
+
+          const token = localStorage.getItem("access_token") || "";
+          const parts = token.split(".");
+          if (parts.length >= 2) {
+            const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+            const decoded = decodeURIComponent(
+              atob(base64)
+                .split("")
+                .map((c) => `%${("00" + c.charCodeAt(0).toString(16)).slice(-2)}`)
+                .join("")
+            );
+            const payload = JSON.parse(decoded || "{}");
+            const sub = payload?.sub;
+            if (sub != null && String(sub).trim() !== "") {
+              return `${WORKSTATION_STATE_KEY_PREFIX}_${String(sub)}`;
+            }
+          }
+        } catch (_) {
+          // ignore and fall through
+        }
+
+        return `${WORKSTATION_STATE_KEY_PREFIX}_anonymous`;
+      }
 
       const $ = (id) => document.getElementById(id);
 
@@ -291,6 +328,7 @@
         renderPatientScreeningDetails(p);
         $("view-report").disabled = !p;
         $("add-to-chat").disabled = !p;
+        saveWorkstationState();
       }
 
       function toDisplayBool(value) {
@@ -340,6 +378,7 @@
           chip.querySelector("button").onclick = () => {
             tags = tags.filter((x) => x.id !== t.id);
             renderTags();
+            saveWorkstationState();
           };
           chip.ondragstart = (e) => e.dataTransfer.setData("text/plain", String(idx));
           chip.ondragover = (e) => e.preventDefault();
@@ -353,6 +392,7 @@
             next.splice(to, 0, moved);
             tags = next;
             renderTags();
+            saveWorkstationState();
           };
           bar.appendChild(chip);
         });
@@ -363,6 +403,7 @@
         if (tags.some((t) => t.id === selectedPatient.id)) return;
         tags.push({ id: selectedPatient.id, name: selectedPatient.name });
         renderTags();
+        saveWorkstationState();
       }
 
       function pushMsg(sender, text) {
@@ -377,6 +418,7 @@
         row.appendChild(bubble);
         wrap.appendChild(row);
         wrap.scrollTop = wrap.scrollHeight;
+        saveWorkstationState();
         return row;
       }
 
@@ -426,10 +468,81 @@
         try {
           const list = await apiService.getDoctorPatients();
           patientList = Array.isArray(list) ? list : [];
+
+          if (Array.isArray(tags) && tags.length > 0) {
+            tags = tags
+              .map((tag) => patientList.find((p) => p.id === tag.id))
+              .filter(Boolean)
+              .map((p) => ({ id: p.id, name: p.name }));
+            renderTags();
+          }
+
+          if (restoreSelectedPatientId != null) {
+            const restored = patientList.find((p) => p.id === restoreSelectedPatientId);
+            if (restored) {
+              selectPatient(restored);
+            }
+            restoreSelectedPatientId = null;
+          }
+
           renderPatientCards(filterPatients($("patient-search").value || ""));
+          saveWorkstationState();
         } catch (error) {
           patientList = [];
           wrap.innerHTML = `<div class="text-sm text-red-500 px-2 py-3">患者列表加载失败：${escapeHtml(error.message || error)}</div>`;
+        }
+      }
+
+      function saveWorkstationState() {
+        try {
+          const chatEl = $("chat-messages");
+          const stateKey = getWorkstationStateKey();
+          const payload = {
+            selectedPatientId: selectedPatient?.id ?? null,
+            tags: Array.isArray(tags) ? tags : [],
+            chatHtml: chatEl ? chatEl.innerHTML : "",
+            evidence: currentEvidencePayload,
+            activeNodeId: activeNodeId,
+            updatedAt: new Date().toISOString(),
+          };
+          localStorage.setItem(stateKey, JSON.stringify(payload));
+        } catch (error) {
+          console.warn("保存工作站状态失败", error);
+        }
+      }
+
+      function restoreWorkstationState() {
+        try {
+          const stateKey = getWorkstationStateKey();
+          const raw = localStorage.getItem(stateKey);
+          if (!raw) return;
+
+          const data = JSON.parse(raw);
+          if (!data || typeof data !== "object") return;
+
+          if (Array.isArray(data.tags)) {
+            tags = data.tags.filter((t) => t && t.id != null).map((t) => ({ id: t.id, name: t.name || "患者" }));
+            renderTags();
+          }
+
+          if (data.selectedPatientId != null) {
+            restoreSelectedPatientId = data.selectedPatientId;
+          }
+
+          const chatEl = $("chat-messages");
+          if (chatEl && typeof data.chatHtml === "string" && data.chatHtml.trim()) {
+            chatEl.innerHTML = data.chatHtml;
+            chatEl.scrollTop = chatEl.scrollHeight;
+          }
+
+          if (data.evidence && typeof data.evidence === "object") {
+            renderEvidence(data.evidence);
+            if (data.activeNodeId) {
+              selectDecisionNode(data.activeNodeId);
+            }
+          }
+        } catch (error) {
+          console.warn("恢复工作站状态失败", error);
         }
       }
 
@@ -467,6 +580,7 @@
         $("evidence-list").innerHTML = `<div class="text-sm text-neutral-400">暂无证据</div>`;
         $("evidence-list-card").classList.add("hidden");
         activeNodeId = null;
+        currentEvidencePayload = null;
       }
 
       function selectDecisionNode(nodeId) {
@@ -476,6 +590,7 @@
         if (!node) return;
 
         activeNodeId = nodeId;
+        saveWorkstationState();
         document.querySelectorAll("#decision-chain-canvas .chain-node").forEach((el) => {
           el.classList.remove("chain-node-active");
         });
@@ -569,16 +684,17 @@
 
       function renderDecisionChain(chain) {
         const canvas = $("decision-chain-canvas");
+        const viewport = $("decision-chain-viewport");
         if (!canvas) return;
         const fixedNodes = [
-          { id: "n1", type: "agent", title: "用户代理", subtitle: "接收医生指令", x: 24, y: 26 },
-          { id: "n2", type: "agent", title: "首席医疗官", subtitle: "病历结构化解析", x: 178, y: 26 },
-          { id: "n3", type: "tool", title: "TI-RADS评分器", subtitle: "风险分级计算", x: 332, y: 26 },
-          { id: "n4", type: "tool", title: "特征分析专家", subtitle: "TI-RADS五维特征综合分析", x: 486, y: 26 },
-          { id: "n5", type: "output", title: "报告生成专家", subtitle: "汇总证据生成诊疗报告", x: 640, y: 26 },
+          { id: "n1", type: "agent", title: "用户代理", subtitle: "接收医生指令" },
+          { id: "n2", type: "agent", title: "首席医疗官", subtitle: "病历结构化解析" },
+          { id: "n3", type: "tool", title: "TI-RADS评分器", subtitle: "风险分级计算" },
+          { id: "n4", type: "tool", title: "特征分析专家", subtitle: "TI-RADS五维特征综合分析" },
+          { id: "n5", type: "output", title: "报告生成专家", subtitle: "汇总证据生成诊疗报告" },
         ];
         const statusMap = Object.fromEntries((chain?.nodes || []).map((n) => [n.id, n]));
-        const nodes = fixedNodes.map((n) => ({ ...n, ...(statusMap[n.id] || {}) }));
+        const rawNodes = fixedNodes.map((n) => ({ ...n, ...(statusMap[n.id] || {}) }));
         const edges = [
           { from: "n1", to: "n2" },
           { from: "n2", to: "n3" },
@@ -586,10 +702,34 @@
           { from: "n4", to: "n5" },
         ];
 
-        if (!nodes.length) {
+        if (!rawNodes.length) {
           canvas.innerHTML = `<div class="absolute inset-0 flex items-center justify-center text-neutral-400 text-sm">暂无链路节点</div>`;
           return;
         }
+
+        // 基于容器实时宽度计算布局，避免不同分辨率下节点重叠或空白过大
+        const nodeW = 148;
+        const nodeH = 78;
+        const paddingX = 20;
+        const paddingY = 24;
+        const minGap = 24;
+        const maxGap = 72;
+        const viewportWidth = Math.max(320, viewport?.clientWidth || 780);
+        const idealGap = Math.floor((viewportWidth - paddingX * 2 - nodeW * rawNodes.length) / Math.max(rawNodes.length - 1, 1));
+        const gap = Math.max(minGap, Math.min(maxGap, Number.isFinite(idealGap) ? idealGap : minGap));
+        const contentWidth = paddingX * 2 + rawNodes.length * nodeW + Math.max(rawNodes.length - 1, 0) * gap;
+        const contentHeight = nodeH + paddingY * 2;
+
+        const nodes = rawNodes.map((n, idx) => ({
+          ...n,
+          x: paddingX + idx * (nodeW + gap),
+          y: paddingY,
+        }));
+
+        canvas.style.width = `${contentWidth}px`;
+        canvas.style.minWidth = `${contentWidth}px`;
+        canvas.style.height = `${contentHeight}px`;
+        canvas.style.margin = "0 auto";
 
         canvas.innerHTML = `<svg class="absolute inset-0 w-full h-full pointer-events-none z-20" id="decision-chain-svg"></svg>`;
         const svg = $("decision-chain-svg");
@@ -629,19 +769,14 @@
           nodeMap[n.id] = { x: n.x || 0, y: n.y || 0 };
         });
 
-        const nodeW = 128;
-        const nodeH = 72;
-        const contentWidth = Math.max(760, Math.max(...nodes.map((n) => (n.x || 0) + nodeW + 28)));
-        canvas.style.width = `${contentWidth}px`;
-        canvas.style.minWidth = `${contentWidth}px`;
         edges.forEach((e) => {
           const from = nodeMap[e.from];
           const to = nodeMap[e.to];
           if (!from || !to) return;
 
-          const startX = from.x + nodeW + 4;
+          const startX = from.x + nodeW + 6;
           const startY = from.y + nodeH / 2;
-          const endX = to.x - 8;
+          const endX = to.x - 10;
           const endY = to.y + nodeH / 2;
           const bendX = Math.round((startX + endX) / 2);
           const pathD = `M ${startX} ${startY} L ${bendX} ${startY} L ${bendX} ${endY} L ${endX} ${endY}`;
@@ -719,11 +854,13 @@
 
         renderDecisionChain(merged.decisionChain);
         $("evidence-list-card").classList.add("hidden");
+        saveWorkstationState();
       }
 
       // ===== 事件绑定 =====
-      loadDoctorPatients();
       setEvidenceEmpty();
+      restoreWorkstationState();
+      loadDoctorPatients();
 
       $("patient-search").addEventListener("input", (e) => renderPatientCards(filterPatients(e.target.value)));
 
@@ -884,6 +1021,7 @@
           }
           pushMsg("ai", `请求失败：${error.message || error}`);
           setEvidenceEmpty();
+          saveWorkstationState();
         } finally {
           sendingBtn.disabled = false;
           isSending = false;
