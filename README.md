@@ -155,15 +155,3 @@ pytest
 ```
 
 如果你想验证 Agent WebSocket 流程，可参考 `agent_backend/test_runner.py` 做联调。
-
-## Data and Model Notes
-
-- 仓库内提供了少量示例患者/报告数据，便于理解 Agent 工作流。
-- 完整医学知识库、向量索引和大体积模型文件没有提交到仓库。
-- 如果你准备扩展 RAG，请优先检查 `agent_backend/src/rag_utils.py`、`agent_backend/data/` 和 `agent_backend/src/tools/` 的依赖关系。
-
-## Current Caveats
-
-- 当前仓库仍然带有明显的原型项目特征，例如本地路径/模型配置、开发数据库写法和实验性 Agent 流程。
-- 医疗结果生成能力依赖外部模型质量与提示词设计，需要人工复核。
-- 若你准备继续演化成可部署系统，建议优先补齐环境变量配置、权限控制、审计日志和安全脱敏。
